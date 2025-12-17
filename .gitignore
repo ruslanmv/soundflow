@@ -56,3 +56,4 @@ catalog/*.json
 generator/free/assets/stems/
 generator/free/assets/soundfonts/
 /backup
+* copy*

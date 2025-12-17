@@ -7,6 +7,17 @@ import { AudioEngine } from "@/lib/audioEngine";
 import { getClientTier } from "@/lib/tier";
 import type { CreateSessionResponse, PremiumDailyResponse } from "@/lib/types";
 
+// Reliable fallback audio for testing/offline scenarios (Wikimedia Commons)
+const FALLBACK_MUSIC_URL_1 =
+  "https://upload.wikimedia.org/wikipedia/commons/9/9d/Anthem_of_Europe_%28US_Navy_instrumental_long_version%29.ogg";
+
+const FALLBACK_MUSIC_URL = "/fallback/electronic.mp3";
+
+  const FALLBACK_NATURE_URL =
+  "https://upload.wikimedia.org/wikipedia/commons/8/8a/Sound_of_rain.ogg";
+
+
+
 export default function Page() {
   const engine = useMemo(() => new AudioEngine(), []);
   const tier = useMemo(() => getClientTier(), []);
@@ -20,7 +31,7 @@ export default function Page() {
   const [natureVol, setNatureVol] = useState(0.3);
 
   const [nowTitle, setNowTitle] = useState("Deep Focus Session");
-  const [nowSubtitle, setNowSubtitle] = useState("AI Generated • 50m remaining");
+  const [nowSubtitle, setNowSubtitle] = useState("Ready to Start");
 
   // Start widget inputs
   const [goalSelect, setGoalSelect] = useState("Deep Focus");
@@ -28,7 +39,7 @@ export default function Page() {
 
   // Builder steps
   const [goalBuilder, setGoalBuilder] = useState<string | null>(null);
-  const [durationChip, setDurationChip] = useState<string | null>(null); // "25m" | "50m" | "90m" | "custom"
+  const [durationChip, setDurationChip] = useState<string | null>(null); // "25m" | "50m" | "90m" | "Custom"
   const [energy, setEnergy] = useState(50);
   const [ambience, setAmbience] = useState(30);
   const [nature, setNature] = useState("Rain");
@@ -38,6 +49,7 @@ export default function Page() {
 
   const [isGenerating, setIsGenerating] = useState(false);
 
+  // Keep volumes applied
   useEffect(() => {
     engine.setMusicVolume(musicVol);
     engine.setAmbienceVolume(natureVol);
@@ -64,10 +76,35 @@ export default function Page() {
     return m ? parseInt(m[1], 10) : 50;
   }
 
+  /**
+   * Helper to load the default "Radio" session
+   */
+  function loadDefaultSession() {
+    console.log("Loading default daily session...");
+    engine.setSources(
+  { url: FALLBACK_MUSIC_URL, type: "audio/mpeg" },
+  { url: FALLBACK_NATURE_URL, type: "audio/ogg" }
+);
+
+    setNowTitle("Daily Flow Radio");
+    setNowSubtitle("Infinite Mix • System Audio");
+  }
+
   async function togglePlayPause() {
+    // FIX: "Radio Mode" - If no session is ready, load the default daily session automatically
+    // instead of showing an error alert.
+    if (!engine.isReady()) {
+      loadDefaultSession();
+    }
+
     if (!isPlaying) {
-      await engine.play();
-      setIsPlaying(true);
+      try {
+        await engine.play();
+        setIsPlaying(true);
+      } catch (e) {
+        console.error("Playback failed", e);
+        alert("Audio playback failed. Please check your connection or try generating a new session.");
+      }
     } else {
       engine.pause();
       setIsPlaying(false);
@@ -87,7 +124,9 @@ export default function Page() {
         if (!res.ok) throw new Error(await res.text());
         const data = (await res.json()) as PremiumDailyResponse;
 
+        // IMPORTANT: setSources queues stop->swap->(optional play) safely inside engine
         engine.setSources(data.musicUrl, data.ambienceUrl);
+
         setNowTitle(data.title || `${goal} Session`);
         setNowSubtitle(`Premium • ${Math.round(data.durationSec / 60)}m`);
       } else {
@@ -107,16 +146,32 @@ export default function Page() {
         const data = (await res.json()) as CreateSessionResponse;
 
         engine.setSources(data.musicUrl, data.ambienceUrl);
+
         setNowTitle(`${goal} Session`);
         setNowSubtitle(`AI Generated • ${Math.round(data.durationSec / 60)}m`);
       }
 
       setIsModalOpen(false);
+
+      // Call play() from this click handler → satisfies autoplay policies
       await engine.play();
       setIsPlaying(true);
     } catch (e) {
-      console.error(e);
-      alert("Failed to generate session. Please try again.");
+      console.warn("Primary audio generation/playback failed. Attempting fallback...", e);
+      
+      // --- FALLBACK LOGIC ---
+      try {
+        // Switch to known-good static URLs to test audio reproduction
+        loadDefaultSession();
+        
+        // Try playing the fallback
+        await engine.play();
+        setIsPlaying(true);
+        setIsModalOpen(false);
+      } catch (fallbackError) {
+        console.error("Fallback audio failed too:", fallbackError);
+        alert("Failed to generate session and fallback audio failed to load. Please check your connection.");
+      }
     } finally {
       setIsGenerating(false);
     }
@@ -129,11 +184,19 @@ export default function Page() {
         <nav className="container mx-auto px-4 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-8">
-              <a href="#" className="text-xl font-semibold gradient-text">
+              <a
+                href="#"
+                onClick={(e) => e.preventDefault()}
+                className="text-xl font-semibold gradient-text"
+              >
                 SoundFlow AI
               </a>
               <div className="hidden md:flex items-center space-x-6">
-                <a href="#" className="text-gray-300 hover:text-white transition-colors duration-200">
+                <a
+                  href="#"
+                  onClick={(e) => e.preventDefault()}
+                  className="text-gray-300 hover:text-white transition-colors duration-200"
+                >
                   Explore
                 </a>
                 <a
@@ -146,7 +209,11 @@ export default function Page() {
                 >
                   AI Session
                 </a>
-                <a href="#" className="text-gray-300 hover:text-white transition-colors duration-200">
+                <a
+                  href="#"
+                  onClick={(e) => e.preventDefault()}
+                  className="text-gray-300 hover:text-white transition-colors duration-200"
+                >
                   Playlists
                 </a>
               </div>
@@ -337,7 +404,8 @@ export default function Page() {
               if (e.target === e.currentTarget) setIsModalOpen(false);
             }}
           >
-            <div className="glass-strong rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            {/* Higher-contrast modal surface */}
+            <div className="glass rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto border border-white/20 bg-black/80">
               <div className="p-8">
                 <div className="flex justify-between items-center mb-8">
                   <h3 className="text-2xl font-bold">AI Session Builder</h3>
@@ -351,22 +419,32 @@ export default function Page() {
                   <h4 className="text-lg font-semibold mb-4">Step 1: Select Your Goal</h4>
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     {[
-                      { label: "Deep Work", icon: "fa-laptop-code", color: "text-teal-400", desc: "Intense focus sessions" },
+                      {
+                        label: "Deep Work",
+                        icon: "fa-laptop-code",
+                        color: "text-teal-400",
+                        desc: "Intense focus sessions"
+                      },
                       { label: "Coding", icon: "fa-code", color: "text-blue-400", desc: "Programming flow state" },
-                      { label: "Reading", icon: "fa-book", color: "text-purple-400", desc: "Extended reading sessions" }
+                      {
+                        label: "Reading",
+                        icon: "fa-book",
+                        color: "text-purple-400",
+                        desc: "Extended reading sessions"
+                      }
                     ].map((g) => (
                       <button
                         key={g.label}
                         onClick={() => setGoalBuilder(g.label)}
-                        className={`goal-option p-6 rounded-xl bg-white/5 border transition-all duration-300 text-left ${
+                        className={`p-6 rounded-xl bg-white/5 border transition-all duration-300 text-left ${
                           goalBuilder === g.label
-                            ? "border-white/30 bg-white/10"
+                            ? "border-white/40 bg-white/10"
                             : "border-white/10 hover:border-white/20 hover:bg-white/10"
                         }`}
                       >
                         <i className={`fas ${g.icon} text-2xl mb-3 ${g.color}`} />
                         <h5 className="font-semibold mb-2">{g.label}</h5>
-                        <p className="text-sm text-gray-400">{g.desc}</p>
+                        <p className="text-sm text-gray-300">{g.desc}</p>
                       </button>
                     ))}
                   </div>
@@ -380,8 +458,10 @@ export default function Page() {
                       <button
                         key={d}
                         onClick={() => setDurationChip(d)}
-                        className={`duration-chip px-6 py-3 rounded-full bg-white/5 border transition-all duration-200 ${
-                          durationChip === d ? "border-white/30 bg-white/10" : "border-white/10 hover:border-white/30"
+                        className={`px-6 py-3 rounded-full bg-white/5 border transition-all duration-200 ${
+                          durationChip === d
+                            ? "border-white/40 bg-white/10"
+                            : "border-white/10 hover:border-white/30"
                         }`}
                       >
                         {d}
@@ -400,16 +480,16 @@ export default function Page() {
                         <span className="text-teal-400">{energyLabel}</span>
                       </div>
                       <div className="flex items-center space-x-4">
-                        <span className="text-sm text-gray-400">Calm</span>
+                        <span className="text-sm text-gray-300">Calm</span>
                         <input
                           type="range"
                           min={0}
                           max={100}
                           value={energy}
                           onChange={(e) => setEnergy(parseInt(e.target.value, 10))}
-                          className="flex-1 h-2 bg-white/10 rounded-lg appearance-none [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-teal-400"
+                          className="flex-1 h-2 bg-white/15 rounded-lg appearance-none [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-teal-400"
                         />
-                        <span className="text-sm text-gray-400">Driven</span>
+                        <span className="text-sm text-gray-300">Driven</span>
                       </div>
                     </div>
 
@@ -419,16 +499,16 @@ export default function Page() {
                         <span className="text-blue-400">{ambienceLabel}</span>
                       </div>
                       <div className="flex items-center space-x-4">
-                        <span className="text-sm text-gray-400">None</span>
+                        <span className="text-sm text-gray-300">None</span>
                         <input
                           type="range"
                           min={0}
                           max={100}
                           value={ambience}
                           onChange={(e) => setAmbience(parseInt(e.target.value, 10))}
-                          className="flex-1 h-2 bg-white/10 rounded-lg appearance-none [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-blue-400"
+                          className="flex-1 h-2 bg-white/15 rounded-lg appearance-none [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-blue-400"
                         />
-                        <span className="text-sm text-gray-400">Heavy</span>
+                        <span className="text-sm text-gray-300">Heavy</span>
                       </div>
                     </div>
                   </div>
@@ -447,8 +527,10 @@ export default function Page() {
                       <button
                         key={n.label}
                         onClick={() => setNature(n.label)}
-                        className={`nature-option p-4 rounded-xl bg-white/5 border transition-all duration-200 ${
-                          nature === n.label ? "border-white/30 bg-white/10" : "border-white/10 hover:border-white/20"
+                        className={`p-4 rounded-xl bg-white/5 border transition-all duration-200 ${
+                          nature === n.label
+                            ? "border-white/40 bg-white/10"
+                            : "border-white/10 hover:border-white/20"
                         }`}
                       >
                         <i className={`fas ${n.icon} text-2xl mb-2 ${n.color}`} />
@@ -468,7 +550,7 @@ export default function Page() {
                   {isGenerating ? "Generating..." : "Generate AI Session"}
                 </button>
 
-                <p className="text-xs text-gray-400 mt-4">
+                <p className="text-xs text-gray-300 mt-4">
                   Tier: <span className="font-semibold">{tier}</span>
                   {tier === "free" ? " (free uses deterministic routing)" : " (premium uses signed daily AI track)"}
                 </p>
@@ -495,7 +577,7 @@ export default function Page() {
 
             {/* Controls */}
             <div className="flex items-center space-x-6">
-              <button className="p-2 rounded-full hover:bg-white/10">
+              <button className="p-2 rounded-full hover:bg-white/10" onClick={(e) => e.preventDefault()}>
                 <i className="fas fa-step-backward" />
               </button>
 
@@ -506,7 +588,7 @@ export default function Page() {
                 <i className={`fas ${isPlaying ? "fa-pause" : "fa-play"}`} />
               </button>
 
-              <button className="p-2 rounded-full hover:bg-white/10">
+              <button className="p-2 rounded-full hover:bg-white/10" onClick={(e) => e.preventDefault()}>
                 <i className="fas fa-step-forward" />
               </button>
 
@@ -529,7 +611,7 @@ export default function Page() {
 
             {/* Timer & Mixer */}
             <div className="flex items-center space-x-6">
-              {/* Timer (static UI for now, matches your HTML) */}
+              {/* Timer (static UI for now) */}
               <div className="flex items-center space-x-3">
                 <div className="text-center">
                   <div className="text-lg font-mono font-semibold">25:00</div>
