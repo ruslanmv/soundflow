@@ -561,7 +561,7 @@ export default function Page() {
       </main>
 
       {/* Bottom Player */}
-      <div className="fixed bottom-0 left-0 right-0 z-40 glass border-t border-white/10">
+      <div className="fixed bottom-0 left-0 right-0 z-40 player-bar">
         <div className="container mx-auto px-4 py-4">
           <div className="flex flex-col md:flex-row items-center justify-between space-y-4 md:space-y-0">
             {/* Track Info */}

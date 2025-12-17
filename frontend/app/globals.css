@@ -208,10 +208,40 @@ body {
   }
 }
 /* Slight translucency ONLY for the bottom player bar (no blur) */
-.player-bar {
+.player-bar-old {
   background: rgba(10, 10, 15, 0.92); /* tiny translucency */
   border-top: 1px solid rgba(255, 255, 255, 0.12);
   box-shadow:
     0 -12px 40px rgba(0, 0, 0, 0.55),
     0 0 0 1px rgba(255, 255, 255, 0.04) inset;
 }
+
+/* Bottom player bar: slight translucency + Gaussian-like backdrop blur */
+.player-bar {
+  background: rgba(10, 10, 15, 0.86);          /* slightly more transparent for blur to show */
+  -webkit-backdrop-filter: blur(14px) saturate(140%);
+  backdrop-filter: blur(14px) saturate(140%);
+
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+
+  box-shadow:
+    0 -12px 40px rgba(0, 0, 0, 0.55),
+    0 0 0 1px rgba(255, 255, 255, 0.05) inset;
+}
+
+/* Optional: add a subtle highlight gradient for a premium “glass” feel */
+.player-bar::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.06) 0%,
+    rgba(255, 255, 255, 0.02) 35%,
+    rgba(0, 0, 0, 0.00) 100%
+  );
+}
+
+
+
