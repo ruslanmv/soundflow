@@ -1,0 +1,33 @@
+name: SoundFlow CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  build-frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+      - name: Install
+        run: cd frontend && npm install
+      - name: Build
+        run: cd frontend && npm run build
+
+  test-backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+      - name: Sync deps
+        run: cd backend && uv sync
+      - name: Import check
+        run: cd backend && uv run python -c "import app.main; print('Backend import OK')"

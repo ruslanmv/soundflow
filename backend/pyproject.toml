@@ -1,0 +1,20 @@
+[project]
+name = "soundflow-backend"
+version = "0.1.0"
+description = "SoundFlow AI FastAPI backend (planner + session generation stub)"
+requires-python = ">=3.10"
+readme = "README.md"
+authors = [{ name = "SoundFlow AI" }]
+
+dependencies = [
+  "fastapi>=0.109.0",
+  "uvicorn[standard]>=0.27.0",
+  "pydantic>=2.6.0",
+  "python-multipart>=0.0.9",
+]
+
+[project.optional-dependencies]
+dev = ["ruff>=0.6.0"]
+
+[tool.ruff]
+line-length = 100
