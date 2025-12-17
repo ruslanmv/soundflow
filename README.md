@@ -181,15 +181,3 @@ If you found this project useful:
 
 </div>
 ```
-
----
-
-If you want, I can also:
-
-* Add **architecture diagrams**
-* Create a **CONTRIBUTING.md**
-* Add **CI/CD badges**
-* Customize branding colors & icons
-* Convert this into a **landing-page style README**
-
-Just tell me 👍
