@@ -1,0 +1,57 @@
+name: Daily Premium Generation Trigger + Buffer
+
+on:
+  schedule:
+    # Runs daily at 03:00 UTC (after free)
+    - cron: "0 3 * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: daily-premium-trigger
+  cancel-in-progress: false
+
+jobs:
+  premium-trigger:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Sync generator deps
+        run: |
+          cd generator
+          uv sync
+
+      - name: Trigger premium generation remotely (optional)
+        if: ${{ secrets.PREMIUM_TRIGGER_URL != '' }}
+        env:
+          PREMIUM_TRIGGER_URL: ${{ secrets.PREMIUM_TRIGGER_URL }}
+          PREMIUM_TRIGGER_TOKEN: ${{ secrets.PREMIUM_TRIGGER_TOKEN }}
+        run: |
+          # This endpoint is something you host later (Modal/RunPod/VPS).
+          # It should start GPU generation and upload to R2.
+          curl -sS -X POST "$PREMIUM_TRIGGER_URL" \
+            -H "Authorization: Bearer $PREMIUM_TRIGGER_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{"job":"premium_daily"}' || true
+
+      - name: Ensure premium buffer for today (never empty)
+        env:
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          R2_PUBLIC_BASE_URL: ${{ secrets.R2_PUBLIC_BASE_URL }}
+        run: |
+          # Recommended script path:
+          # generator/common/buffer_publisher.py
+          cd generator
+          uv run python -m common.buffer_publisher
+
+      - name: Validate catalog after buffer publish
+        run: |
+          cd generator
+          uv run python -m common.catalog_validate

@@ -1,0 +1,75 @@
+# FREE daily remix presets (deterministic)
+# Each preset maps to a "category" and recommended stem tags.
+
+version: 1
+defaults:
+  target_lufs: -14
+  export_bitrate: "192k"
+  fade_in_ms: 1200
+  fade_out_ms: 2500
+
+presets:
+  - id: deep_work
+    title: "Deep Work Session"
+    category: "Deep Work"
+    bpm: 90
+    key: "D minor"
+    energyMin: 40
+    energyMax: 85
+    ambienceMin: 0
+    ambienceMax: 50
+    goalTags: ["deep_work", "coding", "study"]
+    natureTags: ["rain"]
+    stem_rules:
+      drums: ["drums_clean", "drums_minimal"]
+      bass: ["bass_sub", "bass_soft"]
+      pad: ["pad_dark", "pad_air"]
+      top: ["top_sparkle", "top_none"]
+
+  - id: study
+    title: "Study Focus"
+    category: "Study"
+    bpm: 80
+    key: "C major"
+    energyMin: 20
+    energyMax: 70
+    ambienceMin: 0
+    ambienceMax: 60
+    goalTags: ["study", "reading"]
+    natureTags: ["forest"]
+    stem_rules:
+      drums: ["drums_soft", "drums_none"]
+      bass: ["bass_soft", "bass_none"]
+      pad: ["pad_warm", "pad_air"]
+      top: ["top_soft", "top_none"]
+
+  - id: relax
+    title: "Evening Relaxation"
+    category: "Relax"
+    bpm: 70
+    key: "A minor"
+    energyMin: 0
+    energyMax: 50
+    ambienceMin: 10
+    ambienceMax: 80
+    goalTags: ["relax", "meditation"]
+    natureTags: ["ocean"]
+    stem_rules:
+      drums: ["drums_none"]
+      bass: ["bass_none", "bass_soft"]
+      pad: ["pad_warm", "pad_float"]
+      top: ["top_soft"]
+
+  - id: nature
+    title: "Forest Ambience"
+    category: "Nature"
+    bpm: 0
+    key: "N/A"
+    energyMin: 0
+    energyMax: 40
+    ambienceMin: 40
+    ambienceMax: 100
+    goalTags: ["nature", "calm"]
+    natureTags: ["forest", "rain"]
+    stem_rules:
+      ambience: ["ambience_forest", "ambience_rain"]

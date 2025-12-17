@@ -1,0 +1,47 @@
+[
+  {
+    "id": "free-2025-12-17-deep_work",
+    "title": "Deep Work Session",
+    "tier": "free",
+    "date": "2025-12-17",
+    "category": "Deep Work / Focus",
+    "durationSec": 3600,
+    "goalTags": ["deep_work", "productivity", "flow", "concentration"],
+    "natureTags": ["rain"],
+    "energyMin": 40,
+    "energyMax": 90,
+    "ambienceMin": 0,
+    "ambienceMax": 60,
+    "url": "https://cdn.example.com/audio/free/2025-12-17/free-2025-12-17-deep_work.mp3"
+  },
+  {
+    "id": "free-2025-12-17-study",
+    "title": "Study & Reading Focus",
+    "tier": "free",
+    "date": "2025-12-17",
+    "category": "Study / Reading",
+    "durationSec": 3600,
+    "goalTags": ["study", "reading", "calm_focus"],
+    "natureTags": ["forest"],
+    "energyMin": 15,
+    "energyMax": 70,
+    "ambienceMin": 0,
+    "ambienceMax": 70,
+    "url": "https://cdn.example.com/audio/free/2025-12-17/free-2025-12-17-study.mp3"
+  },
+  {
+    "id": "free-2025-12-17-relax",
+    "title": "Relaxing Background Mix",
+    "tier": "free",
+    "date": "2025-12-17",
+    "category": "Relax / Ambient",
+    "durationSec": 3600,
+    "goalTags": ["relax", "ambient", "calm"],
+    "natureTags": ["ocean"],
+    "energyMin": 0,
+    "energyMax": 55,
+    "ambienceMin": 20,
+    "ambienceMax": 100,
+    "url": "https://cdn.example.com/audio/free/2025-12-17/free-2025-12-17-relax.mp3"
+  }
+]

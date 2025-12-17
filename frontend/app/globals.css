@@ -2,36 +2,38 @@
 @tailwind components;
 @tailwind utilities;
 
-:root { color-scheme: dark; }
+:root {
+  color-scheme: dark;
+}
 
 body {
   font-family: "Inter", system-ui, -apple-system, sans-serif;
-  background-color: #09090b;
+  background-color: #09090b; /* zinc-950 */
   color: white;
 }
 
-.glass_old {
+/* Match your HTML */
+.glass {
   background: rgba(255, 255, 255, 0.05);
   backdrop-filter: blur(10px);
   border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
-.glass {
-  background: rgba(12, 12, 16, 0.75); /* solid dark base */
+/* Stronger surface for Windows transparency readability (use on modal panel) */
+.glass-strong {
+  background: rgba(9, 9, 11, 0.85);
   backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-}
-
-
-/* globals.css */
-.glass-modal {
-  background: rgba(9, 9, 11, 0.88); /* zinc-950 but opaque */
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
   border: 1px solid rgba(255, 255, 255, 0.14);
 }
 
+.gradient-bg {
+  background: linear-gradient(
+    135deg,
+    rgba(20, 184, 166, 0.1) 0%,
+    rgba(168, 85, 247, 0.1) 50%,
+    rgba(59, 130, 246, 0.1) 100%
+  );
+}
 
 .gradient-text {
   background: linear-gradient(135deg, #2dd4bf 0%, #a855f7 50%, #3b82f6 100%);
@@ -40,13 +42,15 @@ body {
   background-clip: text;
 }
 
-.gradient-bg {
-  background: linear-gradient(135deg, rgba(20, 184, 166, 0.1) 0%, rgba(168, 85, 247, 0.1) 50%, rgba(59, 130, 246, 0.1) 100%);
-}
-
+/* Waveform animation */
 @keyframes wave {
-  0%, 100% { transform: scaleY(0.4); }
-  50% { transform: scaleY(1); }
+  0%,
+  100% {
+    transform: scaleY(0.4);
+  }
+  50% {
+    transform: scaleY(1);
+  }
 }
 
 .waveform-bar {

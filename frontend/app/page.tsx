@@ -1,44 +1,55 @@
 "use client";
 
+import Image from "next/image";
 import { useEffect, useMemo, useState } from "react";
-import { AudioEngine } from "@/lib/audioEngine";
 import { soundscapeData, colorClasses } from "@/lib/presets";
-import type { CreateSessionResponse } from "@/lib/types";
-
-type Chip = { id: string; label: string };
+import { AudioEngine } from "@/lib/audioEngine";
+import { getClientTier } from "@/lib/tier";
+import type { CreateSessionResponse, PremiumDailyResponse } from "@/lib/types";
 
 export default function Page() {
   const engine = useMemo(() => new AudioEngine(), []);
+  const tier = useMemo(() => getClientTier(), []);
 
+  // Modal UI
   const [isModalOpen, setIsModalOpen] = useState(false);
+
+  // Player state
   const [isPlaying, setIsPlaying] = useState(false);
-  const [isGenerating, setIsGenerating] = useState(false);
+  const [musicVol, setMusicVol] = useState(0.7);
+  const [natureVol, setNatureVol] = useState(0.3);
 
-  // Start widget selections
-  const [goal, setGoal] = useState("Deep Focus");
-  const [durationLabel, setDurationLabel] = useState("50 minutes");
-
-  // Builder selections (mirror your HTML defaults)
-  const [builderGoal, setBuilderGoal] = useState<string | null>(null);
-  const [durationChip, setDurationChip] = useState<string | null>(null);
-  const [energy, setEnergy] = useState(50);
-  const [ambience, setAmbience] = useState(30);
-  const [nature, setNature] = useState<string | null>(null);
-
-  // Derived labels
-  const energyLabel = energy < 33 ? "Calm" : energy < 66 ? "Medium" : "Driven";
-  const ambienceLabel = ambience < 33 ? "Light" : ambience < 66 ? "Medium" : "Heavy";
-
-  // Player UI text
   const [nowTitle, setNowTitle] = useState("Deep Focus Session");
   const [nowSubtitle, setNowSubtitle] = useState("AI Generated • 50m remaining");
 
-  const durationChips: Chip[] = [
-    { id: "25m", label: "25m" },
-    { id: "50m", label: "50m" },
-    { id: "90m", label: "90m" },
-    { id: "custom", label: "Custom" },
-  ];
+  // Start widget inputs
+  const [goalSelect, setGoalSelect] = useState("Deep Focus");
+  const [durationSelect, setDurationSelect] = useState("50 minutes");
+
+  // Builder steps
+  const [goalBuilder, setGoalBuilder] = useState<string | null>(null);
+  const [durationChip, setDurationChip] = useState<string | null>(null); // "25m" | "50m" | "90m" | "custom"
+  const [energy, setEnergy] = useState(50);
+  const [ambience, setAmbience] = useState(30);
+  const [nature, setNature] = useState("Rain");
+
+  const [energyLabel, setEnergyLabel] = useState("Medium");
+  const [ambienceLabel, setAmbienceLabel] = useState("Light");
+
+  const [isGenerating, setIsGenerating] = useState(false);
+
+  useEffect(() => {
+    engine.setMusicVolume(musicVol);
+    engine.setAmbienceVolume(natureVol);
+  }, [engine, musicVol, natureVol]);
+
+  useEffect(() => {
+    setEnergyLabel(energy < 33 ? "Calm" : energy < 66 ? "Medium" : "Driven");
+  }, [energy]);
+
+  useEffect(() => {
+    setAmbienceLabel(ambience < 33 ? "Light" : ambience < 66 ? "Medium" : "Heavy");
+  }, [ambience]);
 
   function minutesFromLabel(label: string) {
     const m = label.match(/(\d+)\s*minutes/i);
@@ -47,87 +58,68 @@ export default function Page() {
   }
 
   function minutesFromChip(chip: string | null) {
-    if (!chip) return minutesFromLabel(durationLabel);
-    if (chip === "custom") return minutesFromLabel(durationLabel);
+    if (!chip) return minutesFromLabel(durationSelect);
+    if (chip.toLowerCase() === "custom") return minutesFromLabel(durationSelect);
     const m = chip.match(/(\d+)/);
     return m ? parseInt(m[1], 10) : 50;
   }
 
   async function togglePlayPause() {
-    if (isPlaying) {
+    if (!isPlaying) {
+      await engine.play();
+      setIsPlaying(true);
+    } else {
       engine.pause();
       setIsPlaying(false);
-      return;
     }
-    await engine.play();
-    setIsPlaying(true);
   }
 
-  // keep waveform animation in sync
-  useEffect(() => {
-    const bars = document.querySelectorAll<HTMLElement>(".waveform-bar");
-    bars.forEach((bar) => {
-      bar.style.animationPlayState = isPlaying ? "running" : "paused";
-    });
-  }, [isPlaying]);
-
   async function generateSession() {
-    // Production behavior: call /api/session so it can proxy to PYTHON_API_URL later.
+    setIsGenerating(true);
     try {
-      setIsGenerating(true);
-
-      const finalGoal = builderGoal ?? goal;
+      // Determine goal/duration exactly like your UI
+      const goal = goalBuilder ?? goalSelect;
       const durationMin = minutesFromChip(durationChip);
 
-      const res = await fetch("/api/session", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          goal: finalGoal,
-          durationMin,
-          energy,
-          ambience,
-          nature: nature ?? "Rain",
-        }),
-      });
+      if (tier === "premium") {
+        // Premium = fetch signed daily (or parameter-based in future)
+        const res = await fetch("/api/premium", { method: "GET" });
+        if (!res.ok) throw new Error(await res.text());
+        const data = (await res.json()) as PremiumDailyResponse;
 
-      const data = (await res.json()) as CreateSessionResponse;
+        engine.setSources(data.musicUrl, data.ambienceUrl);
+        setNowTitle(data.title || `${goal} Session`);
+        setNowSubtitle(`Premium • ${Math.round(data.durationSec / 60)}m`);
+      } else {
+        // Free = deterministic routing (your existing /api/session)
+        const res = await fetch("/api/session", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            goal,
+            durationMin,
+            energy,
+            ambience,
+            nature
+          })
+        });
+        if (!res.ok) throw new Error(await res.text());
+        const data = (await res.json()) as CreateSessionResponse;
 
-      engine.setSources(data.musicUrl, data.ambienceUrl);
-      setNowTitle(`${finalGoal} Session`);
-      setNowSubtitle(`AI Generated • ${Math.round(data.durationSec / 60)}m remaining`);
+        engine.setSources(data.musicUrl, data.ambienceUrl);
+        setNowTitle(`${goal} Session`);
+        setNowSubtitle(`AI Generated • ${Math.round(data.durationSec / 60)}m`);
+      }
 
       setIsModalOpen(false);
       await engine.play();
       setIsPlaying(true);
     } catch (e) {
       console.error(e);
-      alert("AI Session Generated! Starting your personalized focus session.");
-      setIsModalOpen(false);
+      alert("Failed to generate session. Please try again.");
     } finally {
       setIsGenerating(false);
     }
-  }
-
-  function ToggleableButton({
-    active,
-    onClick,
-    className,
-    children,
-  }: {
-    active?: boolean;
-    onClick?: () => void;
-    className: string;
-    children: React.ReactNode;
-  }) {
-    return (
-      <button
-        onClick={onClick}
-        className={[className, active ? "bg-white/10 border-white/30" : ""].join(" ")}
-      >
-        {children}
-      </button>
-    );
   }
 
   return (
@@ -137,17 +129,24 @@ export default function Page() {
         <nav className="container mx-auto px-4 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-8">
-              <a href="#" className="text-xl font-semibold gradient-text" onClick={(e) => e.preventDefault()}>
+              <a href="#" className="text-xl font-semibold gradient-text">
                 SoundFlow AI
               </a>
               <div className="hidden md:flex items-center space-x-6">
-                <a href="#" className="text-gray-300 hover:text-white transition-colors duration-200" onClick={(e) => e.preventDefault()}>
+                <a href="#" className="text-gray-300 hover:text-white transition-colors duration-200">
                   Explore
                 </a>
-                <a href="#" className="text-gray-300 hover:text-white transition-colors duration-200" onClick={(e) => { e.preventDefault(); setIsModalOpen(true); }}>
+                <a
+                  href="#"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    setIsModalOpen(true);
+                  }}
+                  className="text-gray-300 hover:text-white transition-colors duration-200"
+                >
                   AI Session
                 </a>
-                <a href="#" className="text-gray-300 hover:text-white transition-colors duration-200" onClick={(e) => e.preventDefault()}>
+                <a href="#" className="text-gray-300 hover:text-white transition-colors duration-200">
                   Playlists
                 </a>
               </div>
@@ -174,42 +173,62 @@ export default function Page() {
               SoundFlow AI — <span className="gradient-text">focus music that flows.</span>
             </h1>
             <p className="text-xl text-gray-400 mb-12 max-w-2xl mx-auto">
-              AI-powered soundscapes that adapt to your focus needs. Personalized sessions for deep work, study, and relaxation.
+              AI-powered soundscapes that adapt to your focus needs. Personalized sessions for deep work,
+              study, and relaxation.
             </p>
 
             {/* Pill Buttons */}
             <div className="flex flex-wrap justify-center gap-3 mb-12">
               <button
+                onClick={() => {
+                  setGoalBuilder("Deep Work");
+                  setIsModalOpen(true);
+                }}
                 className="px-6 py-3 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 hover:border-teal-400/30 transition-all duration-300 hover:shadow-[0_0_20px_rgba(45,212,191,0.2)]"
-                onClick={() => { setGoal("Deep Work"); setIsModalOpen(true); }}
               >
                 <i className="fas fa-brain mr-2" />
                 Deep Work
               </button>
+
               <button
+                onClick={() => {
+                  setGoalBuilder("Study");
+                  setIsModalOpen(true);
+                }}
                 className="px-6 py-3 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 hover:border-blue-400/30 transition-all duration-300 hover:shadow-[0_0_20px_rgba(96,165,250,0.2)]"
-                onClick={() => { setGoal("Study"); setIsModalOpen(true); }}
               >
                 <i className="fas fa-graduation-cap mr-2" />
                 Study
               </button>
+
               <button
+                onClick={() => {
+                  setGoalBuilder("Relax");
+                  setIsModalOpen(true);
+                }}
                 className="px-6 py-3 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 hover:border-purple-400/30 transition-all duration-300 hover:shadow-[0_0_20px_rgba(192,132,252,0.2)]"
-                onClick={() => { setGoal("Relax"); setIsModalOpen(true); }}
               >
                 <i className="fas fa-couch mr-2" />
                 Relax
               </button>
+
               <button
+                onClick={() => {
+                  setGoalBuilder("Nature");
+                  setIsModalOpen(true);
+                }}
                 className="px-6 py-3 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 hover:border-teal-400/30 transition-all duration-300 hover:shadow-[0_0_20px_rgba(45,212,191,0.2)]"
-                onClick={() => { setGoal("Nature"); setIsModalOpen(true); }}
               >
                 <i className="fas fa-tree mr-2" />
                 Nature
               </button>
+
               <button
+                onClick={() => {
+                  setGoalBuilder("Flow State");
+                  setIsModalOpen(true);
+                }}
                 className="px-6 py-3 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 hover:border-blue-400/30 transition-all duration-300 hover:shadow-[0_0_20px_rgba(96,165,250,0.2)]"
-                onClick={() => { setGoal("Flow State"); setIsModalOpen(true); }}
               >
                 <i className="fas fa-infinity mr-2" />
                 Flow State
@@ -217,14 +236,16 @@ export default function Page() {
             </div>
 
             {/* Start Widget */}
-            <div className="glass-modal rounded-2xl p-8 max-w-xl mx-auto mb-16">
-              <h3 className="text-xl font-semibold mb-6">Start Your Focus Session</h3>
+            <div className="glass rounded-2xl p-8 max-w-xl mx-auto mb-16 text-left">
+              <h3 className="text-xl font-semibold mb-6 text-center md:text-left">
+                Start Your Focus Session
+              </h3>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
                 <div>
                   <label className="block text-sm text-gray-400 mb-2">Goal</label>
                   <select
-                    value={goal}
-                    onChange={(e) => setGoal(e.target.value)}
+                    value={goalSelect}
+                    onChange={(e) => setGoalSelect(e.target.value)}
                     className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-teal-500/50"
                   >
                     <option>Deep Focus</option>
@@ -237,8 +258,8 @@ export default function Page() {
                 <div>
                   <label className="block text-sm text-gray-400 mb-2">Duration</label>
                   <select
-                    value={durationLabel}
-                    onChange={(e) => setDurationLabel(e.target.value)}
+                    value={durationSelect}
+                    onChange={(e) => setDurationSelect(e.target.value)}
                     className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-teal-500/50"
                   >
                     <option>25 minutes</option>
@@ -274,12 +295,14 @@ export default function Page() {
                 className="group bg-white/5 rounded-2xl overflow-hidden border border-white/10 hover:border-white/20 transition-all duration-300 hover:shadow-[0_0_30px_rgba(255,255,255,0.1)]"
               >
                 <div className="relative overflow-hidden">
-                  <img
-                    src={`https://picsum.photos/400/300?random=${item.imageId}`}
-                    alt={`${item.title} cover image`}
-                    className="w-full h-48 object-cover group-hover:scale-105 transition-transform duration-500"
-                    loading="lazy"
-                  />
+                  <div className="relative h-48 w-full">
+                    <Image
+                      src={`https://picsum.photos/400/300?random=${item.imageId}`}
+                      alt={`${item.title} cover image`}
+                      fill
+                      className="object-cover group-hover:scale-105 transition-transform duration-500"
+                    />
+                  </div>
                   <div
                     className={`absolute top-4 right-4 px-3 py-1 rounded-full text-xs font-semibold ${colorClasses[item.color]} border`}
                   >
@@ -307,176 +330,152 @@ export default function Page() {
         </section>
 
         {/* AI Session Builder Modal */}
-        <div
-          className={[
-            "fixed inset-0 z-50 items-center justify-center p-4 bg-black/50 backdrop-blur-sm",
-            isModalOpen ? "flex" : "hidden",
-          ].join(" ")}
-          onClick={(e) => {
-            if (e.target === e.currentTarget) setIsModalOpen(false);
-          }}
-        >
-          <div className="glass-modal rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-            <div className="p-8">
-              <div className="flex justify-between items-center mb-8">
-                <h3 className="text-2xl font-bold">AI Session Builder</h3>
+        {isModalOpen && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"
+            onClick={(e) => {
+              if (e.target === e.currentTarget) setIsModalOpen(false);
+            }}
+          >
+            <div className="glass-strong rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+              <div className="p-8">
+                <div className="flex justify-between items-center mb-8">
+                  <h3 className="text-2xl font-bold">AI Session Builder</h3>
+                  <button onClick={() => setIsModalOpen(false)} className="p-2 rounded-lg hover:bg-white/10">
+                    <i className="fas fa-times" />
+                  </button>
+                </div>
+
+                {/* Step 1 */}
+                <div className="mb-10">
+                  <h4 className="text-lg font-semibold mb-4">Step 1: Select Your Goal</h4>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    {[
+                      { label: "Deep Work", icon: "fa-laptop-code", color: "text-teal-400", desc: "Intense focus sessions" },
+                      { label: "Coding", icon: "fa-code", color: "text-blue-400", desc: "Programming flow state" },
+                      { label: "Reading", icon: "fa-book", color: "text-purple-400", desc: "Extended reading sessions" }
+                    ].map((g) => (
+                      <button
+                        key={g.label}
+                        onClick={() => setGoalBuilder(g.label)}
+                        className={`goal-option p-6 rounded-xl bg-white/5 border transition-all duration-300 text-left ${
+                          goalBuilder === g.label
+                            ? "border-white/30 bg-white/10"
+                            : "border-white/10 hover:border-white/20 hover:bg-white/10"
+                        }`}
+                      >
+                        <i className={`fas ${g.icon} text-2xl mb-3 ${g.color}`} />
+                        <h5 className="font-semibold mb-2">{g.label}</h5>
+                        <p className="text-sm text-gray-400">{g.desc}</p>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Step 2 */}
+                <div className="mb-10">
+                  <h4 className="text-lg font-semibold mb-4">Step 2: Choose Duration</h4>
+                  <div className="flex flex-wrap gap-3">
+                    {["25m", "50m", "90m", "Custom"].map((d) => (
+                      <button
+                        key={d}
+                        onClick={() => setDurationChip(d)}
+                        className={`duration-chip px-6 py-3 rounded-full bg-white/5 border transition-all duration-200 ${
+                          durationChip === d ? "border-white/30 bg-white/10" : "border-white/10 hover:border-white/30"
+                        }`}
+                      >
+                        {d}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Step 3 */}
+                <div className="mb-10">
+                  <h4 className="text-lg font-semibold mb-6">Step 3: Fine-tune Your Session</h4>
+                  <div className="space-y-8">
+                    <div>
+                      <div className="flex justify-between mb-2">
+                        <label className="font-medium">Energy Level</label>
+                        <span className="text-teal-400">{energyLabel}</span>
+                      </div>
+                      <div className="flex items-center space-x-4">
+                        <span className="text-sm text-gray-400">Calm</span>
+                        <input
+                          type="range"
+                          min={0}
+                          max={100}
+                          value={energy}
+                          onChange={(e) => setEnergy(parseInt(e.target.value, 10))}
+                          className="flex-1 h-2 bg-white/10 rounded-lg appearance-none [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-teal-400"
+                        />
+                        <span className="text-sm text-gray-400">Driven</span>
+                      </div>
+                    </div>
+
+                    <div>
+                      <div className="flex justify-between mb-2">
+                        <label className="font-medium">Ambience Level</label>
+                        <span className="text-blue-400">{ambienceLabel}</span>
+                      </div>
+                      <div className="flex items-center space-x-4">
+                        <span className="text-sm text-gray-400">None</span>
+                        <input
+                          type="range"
+                          min={0}
+                          max={100}
+                          value={ambience}
+                          onChange={(e) => setAmbience(parseInt(e.target.value, 10))}
+                          className="flex-1 h-2 bg-white/10 rounded-lg appearance-none [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-blue-400"
+                        />
+                        <span className="text-sm text-gray-400">Heavy</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Step 4 */}
+                <div className="mb-10">
+                  <h4 className="text-lg font-semibold mb-4">Step 4: Add Nature Sounds</h4>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    {[
+                      { label: "Rain", icon: "fa-cloud-rain", color: "text-blue-400" },
+                      { label: "Forest", icon: "fa-tree", color: "text-green-400" },
+                      { label: "Fireplace", icon: "fa-fire", color: "text-orange-400" },
+                      { label: "Ocean", icon: "fa-water", color: "text-cyan-400" }
+                    ].map((n) => (
+                      <button
+                        key={n.label}
+                        onClick={() => setNature(n.label)}
+                        className={`nature-option p-4 rounded-xl bg-white/5 border transition-all duration-200 ${
+                          nature === n.label ? "border-white/30 bg-white/10" : "border-white/10 hover:border-white/20"
+                        }`}
+                      >
+                        <i className={`fas ${n.icon} text-2xl mb-2 ${n.color}`} />
+                        <span>{n.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Generate */}
                 <button
-                  onClick={() => setIsModalOpen(false)}
-                  className="p-2 rounded-lg hover:bg-white/10"
-                  aria-label="Close"
+                  onClick={generateSession}
+                  disabled={isGenerating}
+                  className="w-full bg-gradient-to-r from-teal-500 to-purple-500 hover:from-teal-600 hover:to-purple-600 text-white font-semibold py-4 rounded-xl transition-all duration-300 hover:shadow-[0_0_30px_rgba(168,85,247,0.4)] disabled:opacity-50"
                 >
-                  <i className="fas fa-times" />
+                  <i className="fas fa-magic mr-2" />
+                  {isGenerating ? "Generating..." : "Generate AI Session"}
                 </button>
+
+                <p className="text-xs text-gray-400 mt-4">
+                  Tier: <span className="font-semibold">{tier}</span>
+                  {tier === "free" ? " (free uses deterministic routing)" : " (premium uses signed daily AI track)"}
+                </p>
               </div>
-
-              {/* Step 1: Goal */}
-              <div className="mb-10">
-                <h4 className="text-lg font-semibold mb-4">Step 1: Select Your Goal</h4>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <ToggleableButton
-                    active={builderGoal === "Deep Work"}
-                    onClick={() => setBuilderGoal("Deep Work")}
-                    className="goal-option p-6 rounded-xl bg-white/5 border border-white/10 hover:border-teal-400/30 hover:bg-white/10 transition-all duration-300 text-left"
-                  >
-                    <i className="fas fa-laptop-code text-2xl mb-3 text-teal-400 block" />
-                    <h5 className="font-semibold mb-2">Deep Work</h5>
-                    <p className="text-sm text-gray-400">Intense focus sessions</p>
-                  </ToggleableButton>
-
-                  <ToggleableButton
-                    active={builderGoal === "Coding"}
-                    onClick={() => setBuilderGoal("Coding")}
-                    className="goal-option p-6 rounded-xl bg-white/5 border border-white/10 hover:border-blue-400/30 hover:bg-white/10 transition-all duration-300 text-left"
-                  >
-                    <i className="fas fa-code text-2xl mb-3 text-blue-400 block" />
-                    <h5 className="font-semibold mb-2">Coding</h5>
-                    <p className="text-sm text-gray-400">Programming flow state</p>
-                  </ToggleableButton>
-
-                  <ToggleableButton
-                    active={builderGoal === "Reading"}
-                    onClick={() => setBuilderGoal("Reading")}
-                    className="goal-option p-6 rounded-xl bg-white/5 border border-white/10 hover:border-purple-400/30 hover:bg-white/10 transition-all duration-300 text-left"
-                  >
-                    <i className="fas fa-book text-2xl mb-3 text-purple-400 block" />
-                    <h5 className="font-semibold mb-2">Reading</h5>
-                    <p className="text-sm text-gray-400">Extended reading sessions</p>
-                  </ToggleableButton>
-                </div>
-              </div>
-
-              {/* Step 2: Duration */}
-              <div className="mb-10">
-                <h4 className="text-lg font-semibold mb-4">Step 2: Choose Duration</h4>
-                <div className="flex flex-wrap gap-3">
-                  {durationChips.map((c) => (
-                    <ToggleableButton
-                      key={c.id}
-                      active={durationChip === c.id}
-                      onClick={() => setDurationChip(c.id)}
-                      className="duration-chip px-6 py-3 rounded-full bg-white/5 border border-white/10 hover:border-white/30 transition-all duration-200"
-                    >
-                      {c.label}
-                    </ToggleableButton>
-                  ))}
-                </div>
-              </div>
-
-              {/* Step 3: Sliders */}
-              <div className="mb-10">
-                <h4 className="text-lg font-semibold mb-6">Step 3: Fine-tune Your Session</h4>
-                <div className="space-y-8">
-                  <div>
-                    <div className="flex justify-between mb-2">
-                      <label className="font-medium">Energy Level</label>
-                      <span className="text-teal-400">{energyLabel}</span>
-                    </div>
-                    <div className="flex items-center space-x-4">
-                      <span className="text-sm text-gray-400">Calm</span>
-                      <input
-                        type="range"
-                        min="0"
-                        max="100"
-                        value={energy}
-                        onChange={(e) => setEnergy(parseInt(e.target.value, 10))}
-                        className="flex-1 h-2 bg-white/10 rounded-lg appearance-none [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-teal-400"
-                      />
-                      <span className="text-sm text-gray-400">Driven</span>
-                    </div>
-                  </div>
-
-                  <div>
-                    <div className="flex justify-between mb-2">
-                      <label className="font-medium">Ambience Level</label>
-                      <span className="text-blue-400">{ambienceLabel}</span>
-                    </div>
-                    <div className="flex items-center space-x-4">
-                      <span className="text-sm text-gray-400">None</span>
-                      <input
-                        type="range"
-                        min="0"
-                        max="100"
-                        value={ambience}
-                        onChange={(e) => setAmbience(parseInt(e.target.value, 10))}
-                        className="flex-1 h-2 bg-white/10 rounded-lg appearance-none [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-blue-400"
-                      />
-                      <span className="text-sm text-gray-400">Heavy</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Step 4: Nature Sounds */}
-              <div className="mb-10">
-                <h4 className="text-lg font-semibold mb-4">Step 4: Add Nature Sounds</h4>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                  <ToggleableButton
-                    active={nature === "Rain"}
-                    onClick={() => setNature("Rain")}
-                    className="nature-option p-4 rounded-xl bg-white/5 border border-white/10 hover:border-teal-400/30 transition-all duration-200"
-                  >
-                    <i className="fas fa-cloud-rain text-2xl mb-2 text-blue-400 block" />
-                    <span>Rain</span>
-                  </ToggleableButton>
-                  <ToggleableButton
-                    active={nature === "Forest"}
-                    onClick={() => setNature("Forest")}
-                    className="nature-option p-4 rounded-xl bg-white/5 border border-white/10 hover:border-teal-400/30 transition-all duration-200"
-                  >
-                    <i className="fas fa-tree text-2xl mb-2 text-green-400 block" />
-                    <span>Forest</span>
-                  </ToggleableButton>
-                  <ToggleableButton
-                    active={nature === "Fireplace"}
-                    onClick={() => setNature("Fireplace")}
-                    className="nature-option p-4 rounded-xl bg-white/5 border border-white/10 hover:border-teal-400/30 transition-all duration-200"
-                  >
-                    <i className="fas fa-fire text-2xl mb-2 text-orange-400 block" />
-                    <span>Fireplace</span>
-                  </ToggleableButton>
-                  <ToggleableButton
-                    active={nature === "Ocean"}
-                    onClick={() => setNature("Ocean")}
-                    className="nature-option p-4 rounded-xl bg-white/5 border border-white/10 hover:border-teal-400/30 transition-all duration-200"
-                  >
-                    <i className="fas fa-water text-2xl mb-2 text-cyan-400 block" />
-                    <span>Ocean</span>
-                  </ToggleableButton>
-                </div>
-              </div>
-
-              {/* Generate Button */}
-              <button
-                onClick={generateSession}
-                disabled={isGenerating}
-                className="w-full bg-gradient-to-r from-teal-500 to-purple-500 hover:from-teal-600 hover:to-purple-600 text-white font-semibold py-4 rounded-xl transition-all duration-300 hover:shadow-[0_0_30px_rgba(168,85,247,0.4)] disabled:opacity-60"
-              >
-                <i className="fas fa-magic mr-2" />
-                {isGenerating ? "Generating..." : "Generate AI Session"}
-              </button>
             </div>
           </div>
-        </div>
+        )}
       </main>
 
       {/* Bottom Player */}
@@ -485,7 +484,9 @@ export default function Page() {
           <div className="flex flex-col md:flex-row items-center justify-between space-y-4 md:space-y-0">
             {/* Track Info */}
             <div className="flex items-center space-x-4">
-              <img src="https://picsum.photos/60?random=1" alt="Current track cover" className="rounded-xl w-12 h-12" />
+              <div className="relative w-12 h-12 rounded-xl overflow-hidden">
+                <Image src="https://picsum.photos/60?random=1" alt="Current track cover" fill className="object-cover" />
+              </div>
               <div>
                 <h4 className="font-semibold">{nowTitle}</h4>
                 <p className="text-sm text-gray-400">{nowSubtitle}</p>
@@ -497,30 +498,38 @@ export default function Page() {
               <button className="p-2 rounded-full hover:bg-white/10">
                 <i className="fas fa-step-backward" />
               </button>
+
               <button
-                id="playPauseBtn"
                 onClick={togglePlayPause}
                 className="p-3 rounded-full bg-white/10 hover:bg-white/20 border border-white/20"
               >
                 <i className={`fas ${isPlaying ? "fa-pause" : "fa-play"}`} />
               </button>
+
               <button className="p-2 rounded-full hover:bg-white/10">
                 <i className="fas fa-step-forward" />
               </button>
 
               {/* Waveform */}
               <div className="hidden md:flex items-center space-x-1 h-8">
-                <div className="waveform-bar w-1 h-3 bg-teal-400/60 rounded-full" style={{ ["--i" as any]: 0 }} />
-                <div className="waveform-bar w-1 h-5 bg-teal-400/80 rounded-full" style={{ ["--i" as any]: 1 }} />
-                <div className="waveform-bar w-1 h-8 bg-teal-400 rounded-full" style={{ ["--i" as any]: 2 }} />
-                <div className="waveform-bar w-1 h-5 bg-teal-400/80 rounded-full" style={{ ["--i" as any]: 3 }} />
-                <div className="waveform-bar w-1 h-3 bg-teal-400/60 rounded-full" style={{ ["--i" as any]: 4 }} />
+                {[0, 1, 2, 3, 4].map((i) => (
+                  <div
+                    key={i}
+                    className="waveform-bar w-1 rounded-full bg-teal-400/80"
+                    style={{
+                      // @ts-ignore
+                      "--i": i,
+                      height: i === 2 ? "2rem" : i === 1 || i === 3 ? "1.25rem" : "0.75rem",
+                      animationPlayState: isPlaying ? "running" : "paused"
+                    }}
+                  />
+                ))}
               </div>
             </div>
 
             {/* Timer & Mixer */}
             <div className="flex items-center space-x-6">
-              {/* Timer */}
+              {/* Timer (static UI for now, matches your HTML) */}
               <div className="flex items-center space-x-3">
                 <div className="text-center">
                   <div className="text-lg font-mono font-semibold">25:00</div>
@@ -535,14 +544,28 @@ export default function Page() {
               <div className="hidden md:block">
                 <div className="flex items-center space-x-2">
                   <i className="fas fa-music text-sm text-gray-400" />
-                  <input type="range" min="0" max="100" defaultValue="70" className="w-24 h-1 bg-white/10 rounded-lg" />
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    value={Math.round(musicVol * 100)}
+                    onChange={(e) => setMusicVol(parseInt(e.target.value, 10) / 100)}
+                    className="w-24 h-1 bg-white/10 rounded-lg"
+                  />
                   <i className="fas fa-tree text-sm text-gray-400" />
-                  <input type="range" min="0" max="100" defaultValue="30" className="w-24 h-1 bg-white/10 rounded-lg" />
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    value={Math.round(natureVol * 100)}
+                    onChange={(e) => setNatureVol(parseInt(e.target.value, 10) / 100)}
+                    className="w-24 h-1 bg-white/10 rounded-lg"
+                  />
                 </div>
                 <div className="text-xs text-gray-400 mt-1">Music vs Nature</div>
               </div>
 
-              {/* Focus Mode */}
+              {/* Focus Mode (UI only for now) */}
               <button className="p-2 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10">
                 <i className="fas fa-eye-slash" />
               </button>
