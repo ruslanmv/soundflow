@@ -59,3 +59,6 @@ generator/free/assets/soundfonts/
 * copy*
 * copy *
 * copy *.*
+/generator/.soundflow_out
+/generator/.soundflow_tmp
+generator/uv.lock

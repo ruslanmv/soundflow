@@ -4,6 +4,9 @@ import argparse
 import os
 import random
 from pathlib import Path
+from typing import Optional
+import urllib.request
+
 import yaml
 
 from common.audio_utils import (
@@ -25,20 +28,106 @@ STEMS_DIR = ASSETS / "stems"
 TMP = Path(".soundflow_tmp/free")
 OUT = Path(".soundflow_out/free")
 
+# -------------------------------------------------------------------
+# Demo stems (fallback) — only used if assets/stems is empty.
+# These should be replaced by your own licensed stems in production.
+#
+# NOTE: Put URLs to WAV files (not MP3) for best ffmpeg mixing.
+# -------------------------------------------------------------------
+DEMO_STEMS = {
+    # tags must match free_presets.yaml stem_rules tags (example: "pad", "drums", "ambience_rain", etc.)
+    "pad": [
+        # CC0 / free sample WAVs (replace if you want)
+        "https://cdn.freesound.org/previews/466/466113_7085344-lq.wav",  # soft pad-ish ambience
+    ],
+    "drums": [
+        "https://cdn.freesound.org/previews/522/522693_9028364-lq.wav",  # light percussion loop
+    ],
+    "bass": [
+        "https://cdn.freesound.org/previews/320/320181_5260872-lq.wav",  # low tone / bass-ish
+    ],
+    "ambience_rain": [
+        "https://cdn.freesound.org/previews/346/346170_3248244-lq.wav",  # rain ambience
+    ],
+    "ambience_forest": [
+        "https://cdn.freesound.org/previews/413/413854_5121236-lq.wav",  # forest ambience
+    ],
+}
+
+# If your YAML uses different tags, map them here:
+TAG_ALIASES = {
+    "drums_clean": "drums",
+    "pad_warm": "pad",
+    "bass_soft": "bass",
+    "rain": "ambience_rain",
+    "forest": "ambience_forest",
+}
+
 
 def load_presets() -> dict:
     p = Path(__file__).resolve().parents[1] / "prompts" / "free_presets.yaml"
     return yaml.safe_load(p.read_text(encoding="utf-8"))
 
 
-def choose_stem(tag: str) -> Path | None:
+def _safe_tag(tag: str) -> str:
+    tag = tag.strip()
+    return TAG_ALIASES.get(tag, tag)
+
+
+def stems_exist() -> bool:
+    return STEMS_DIR.exists() and any(STEMS_DIR.glob("*.wav"))
+
+
+def download_file(url: str, dst: Path) -> None:
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    print(f"⬇️  Downloading demo stem:\n   {url}\n   -> {dst}")
+    urllib.request.urlretrieve(url, str(dst))
+
+
+def ensure_demo_stems() -> None:
+    """
+    If no stems exist, download a minimal demo set so `make test-generator` works.
+    This is safe for dev/testing; replace by your own stems for production.
+    """
+    if stems_exist():
+        return
+
+    print(f"⚠️ No stems found in {STEMS_DIR}. Bootstrapping demo stems for testing...")
+    STEMS_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Download one file per tag (first URL)
+    for tag, urls in DEMO_STEMS.items():
+        if not urls:
+            continue
+        url = urls[0]
+        out = STEMS_DIR / f"{tag}_demo_01.wav"
+        if out.exists():
+            continue
+        try:
+            download_file(url, out)
+        except Exception as e:
+            print(f"❌ Failed to download {url}: {e}")
+
+    if not stems_exist():
+        raise RuntimeError(
+            f"Still no stems in {STEMS_DIR}. Either:\n"
+            f"- Add your own WAV stems to generator/free/assets/stems/\n"
+            f"- Or replace DEMO_STEMS URLs with valid WAV files.\n"
+        )
+
+    print("✅ Demo stems ready.")
+
+
+def choose_stem(tag: str) -> Optional[Path]:
     """
     Stems must be named like:
       drums_clean_01.wav
       pad_warm_02.wav
       ambience_rain_01.wav
+
     We'll match by prefix tag_*
     """
+    tag = _safe_tag(tag)
     candidates = list(STEMS_DIR.glob(f"{tag}_*.wav"))
     if not candidates:
         return None
@@ -47,10 +136,6 @@ def choose_stem(tag: str) -> Path | None:
 
 
 def build_track(date: str, preset: dict, total_sec: int) -> tuple[Path, dict]:
-    """
-    Creates a free track by selecting stems and mixing.
-    Returns mp3 path + catalog entry.
-    """
     preset_id = preset["id"]
     title = preset["title"]
     category = preset["category"]
@@ -66,9 +151,8 @@ def build_track(date: str, preset: dict, total_sec: int) -> tuple[Path, dict]:
     selected: list[Path] = []
 
     # Select stems
-    for channel, tags in stem_rules.items():
+    for _channel, tags in stem_rules.items():
         tags = tags or []
-        # choose one tag from candidates
         if not tags:
             continue
         tag = rnd.choice(tags)
@@ -77,9 +161,16 @@ def build_track(date: str, preset: dict, total_sec: int) -> tuple[Path, dict]:
             selected.append(stem)
 
     if not selected:
-        raise RuntimeError(f"No stems found for preset {preset_id}. Add files to {STEMS_DIR}")
+        # Better error message now, showing available stems and requested tags.
+        available = [p.name for p in STEMS_DIR.glob("*.wav")]
+        raise RuntimeError(
+            f"No stems found for preset '{preset_id}'.\n"
+            f"Stems dir: {STEMS_DIR}\n"
+            f"Available stems: {available[:20]}{'...' if len(available) > 20 else ''}\n"
+            f"Preset stem_rules: {stem_rules}\n"
+        )
 
-    # Loop each stem to full duration (WAV)
+    # Loop each stem to full duration
     looped_paths: list[Path] = []
     for i, stem in enumerate(selected):
         out_wav = TMP / f"{date}_{preset_id}_{i}_loop.wav"
@@ -119,7 +210,6 @@ def build_track(date: str, preset: dict, total_sec: int) -> tuple[Path, dict]:
         "energyMax": int(preset.get("energyMax", 100)),
         "ambienceMin": int(preset.get("ambienceMin", 0)),
         "ambienceMax": int(preset.get("ambienceMax", 100)),
-        # url is filled later after upload (or use public base URL)
         "url": None,
     }
     return mp3, entry
@@ -134,6 +224,9 @@ def main():
 
     date = args.date
     total_sec = args.duration_sec
+
+    # ✅ NEW: ensure stems exist for dev/test
+    ensure_demo_stems()
 
     data = load_presets()
     defaults = data.get("defaults", {})
@@ -159,7 +252,6 @@ def main():
             if free_base:
                 entry["url"] = f"{free_base}/{key}"
             else:
-                # if you use R2 public bucket / custom domain, put it here
                 entry["url"] = f"/{key}"
 
         new_entries.append(entry)

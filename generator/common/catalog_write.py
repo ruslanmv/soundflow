@@ -3,9 +3,10 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from typing import Any
+
 import orjson
 
-from common.r2_upload import upload_json_bytes, r2_client
+from common.r2_upload import upload_json_bytes, get_object_bytes
 
 
 @dataclass
@@ -30,21 +31,15 @@ def _dumps(obj: Any) -> bytes:
 
 
 def read_catalog(bucket: str, key: str) -> list[dict]:
-    s3 = r2_client()
     try:
-        obj = s3.get_object(Bucket=bucket, Key=key)
-        return _loads(obj["Body"].read())
-    except s3.exceptions.NoSuchKey:
-        return []
+        raw = get_object_bytes(bucket=bucket, key=key)   # <-- prefix-safe read
+        data = _loads(raw)
+        return data if isinstance(data, list) else []
     except Exception:
-        # If not found or invalid, start fresh
         return []
 
 
 def upsert_tracks(existing: list[dict], new_tracks: list[dict]) -> list[dict]:
-    """
-    Upserts by `id`, keeps stable ordering by date desc then title.
-    """
     by_id = {t["id"]: t for t in existing if "id" in t}
     for t in new_tracks:
         by_id[t["id"]] = t
@@ -55,4 +50,4 @@ def upsert_tracks(existing: list[dict], new_tracks: list[dict]) -> list[dict]:
 
 
 def write_catalog(bucket: str, key: str, tracks: list[dict]) -> None:
-    upload_json_bytes(_dumps(tracks), bucket, key)
+    upload_json_bytes(_dumps(tracks), bucket=bucket, key=key)
