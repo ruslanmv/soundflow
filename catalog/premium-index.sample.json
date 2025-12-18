@@ -12,7 +12,8 @@
     "energyMax": 95,
     "ambienceMin": 0,
     "ambienceMax": 60,
-    "objectKey": "audio/premium/2025-12-17/premium-2025-12-17-premium_deep_work.mp3"
+    "objectKey": "audio/premium/2025-12-17/premium-2025-12-17-premium_deep_work.mp3",
+    "previewUrl": "https://upload.wikimedia.org/wikipedia/commons/9/9d/Anthem_of_Europe_%28US_Navy_instrumental_long_version%29.ogg"
   },
   {
     "id": "premium-2025-12-17-premium_study",
@@ -27,6 +28,7 @@
     "energyMax": 75,
     "ambienceMin": 0,
     "ambienceMax": 75,
-    "objectKey": "audio/premium/2025-12-17/premium-2025-12-17-premium_study.mp3"
+    "objectKey": "audio/premium/2025-12-17/premium-2025-12-17-premium_study.mp3",
+    "previewUrl": "https://upload.wikimedia.org/wikipedia/commons/6/69/Forest_track_2.ogg"
   }
 ]

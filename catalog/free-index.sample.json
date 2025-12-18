@@ -12,7 +12,7 @@
     "energyMax": 90,
     "ambienceMin": 0,
     "ambienceMax": 60,
-    "url": "https://cdn.example.com/audio/free/2025-12-17/free-2025-12-17-deep_work.mp3"
+    "url": "https://upload.wikimedia.org/wikipedia/commons/9/9d/Anthem_of_Europe_%28US_Navy_instrumental_long_version%29.ogg"
   },
   {
     "id": "free-2025-12-17-study",
@@ -27,7 +27,7 @@
     "energyMax": 70,
     "ambienceMin": 0,
     "ambienceMax": 70,
-    "url": "https://cdn.example.com/audio/free/2025-12-17/free-2025-12-17-study.mp3"
+    "url": "https://upload.wikimedia.org/wikipedia/commons/6/69/Forest_track_2.ogg"
   },
   {
     "id": "free-2025-12-17-relax",
@@ -42,6 +42,6 @@
     "energyMax": 55,
     "ambienceMin": 20,
     "ambienceMax": 100,
-    "url": "https://cdn.example.com/audio/free/2025-12-17/free-2025-12-17-relax.mp3"
+    "url": "https://upload.wikimedia.org/wikipedia/commons/1/16/Oceanwavescrushing.ogg"
   }
 ]
