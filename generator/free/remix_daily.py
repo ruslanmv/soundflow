@@ -1,13 +1,21 @@
+# generator/free/remix_daily.py
 from __future__ import annotations
 
 import argparse
 import os
 import random
-from pathlib import Path
-from typing import Optional
-import urllib.request
-
 import yaml
+from pathlib import Path
+
+# Import Generators
+from free.music_engine import (
+    generate_techno_kick,
+    generate_techno_bass,
+    generate_techno_arp,
+    generate_lofi_drums,
+    generate_lofi_keys,
+    generate_texture,
+)
 
 from common.audio_utils import (
     require_ffmpeg,
@@ -20,252 +28,160 @@ from common.audio_utils import (
 from common.r2_upload import upload_file
 from common.catalog_write import read_catalog, write_catalog, upsert_tracks, get_catalog_paths
 
-
 ROOT = Path(__file__).resolve().parent
 ASSETS = ROOT / "assets"
 STEMS_DIR = ASSETS / "stems"
-
 TMP = Path(".soundflow_tmp/free")
 OUT = Path(".soundflow_out/free")
-
-# -------------------------------------------------------------------
-# Demo stems (fallback) — only used if assets/stems is empty.
-# These should be replaced by your own licensed stems in production.
-#
-# NOTE: Put URLs to WAV files (not MP3) for best ffmpeg mixing.
-# -------------------------------------------------------------------
-DEMO_STEMS = {
-    # tags must match free_presets.yaml stem_rules tags (example: "pad", "drums", "ambience_rain", etc.)
-    "pad": [
-        # CC0 / free sample WAVs (replace if you want)
-        "https://cdn.freesound.org/previews/466/466113_7085344-lq.wav",  # soft pad-ish ambience
-    ],
-    "drums": [
-        "https://cdn.freesound.org/previews/522/522693_9028364-lq.wav",  # light percussion loop
-    ],
-    "bass": [
-        "https://cdn.freesound.org/previews/320/320181_5260872-lq.wav",  # low tone / bass-ish
-    ],
-    "ambience_rain": [
-        "https://cdn.freesound.org/previews/346/346170_3248244-lq.wav",  # rain ambience
-    ],
-    "ambience_forest": [
-        "https://cdn.freesound.org/previews/413/413854_5121236-lq.wav",  # forest ambience
-    ],
-}
-
-# If your YAML uses different tags, map them here:
-TAG_ALIASES = {
-    "drums_clean": "drums",
-    "pad_warm": "pad",
-    "bass_soft": "bass",
-    "rain": "ambience_rain",
-    "forest": "ambience_forest",
-}
-
 
 def load_presets() -> dict:
     p = Path(__file__).resolve().parents[1] / "prompts" / "free_presets.yaml"
     return yaml.safe_load(p.read_text(encoding="utf-8"))
 
-
-def _safe_tag(tag: str) -> str:
-    tag = tag.strip()
-    return TAG_ALIASES.get(tag, tag)
-
-
-def stems_exist() -> bool:
-    return STEMS_DIR.exists() and any(STEMS_DIR.glob("*.wav"))
-
-
-def download_file(url: str, dst: Path) -> None:
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    print(f"⬇️  Downloading demo stem:\n   {url}\n   -> {dst}")
-    urllib.request.urlretrieve(url, str(dst))
-
-
-def ensure_demo_stems() -> None:
+def ensure_procedural_library(date_seed: str):
     """
-    If no stems exist, download a minimal demo set so `make test-generator` works.
-    This is safe for dev/testing; replace by your own stems for production.
+    Generates a library of variants for each sound type.
+    We create _v1, _v2, etc. so the remixer has options.
     """
-    if stems_exist():
-        return
-
-    print(f"⚠️ No stems found in {STEMS_DIR}. Bootstrapping demo stems for testing...")
     STEMS_DIR.mkdir(parents=True, exist_ok=True)
+    
+    # -----------------------
+    # TECHNO LIBRARY (128 BPM)
+    # -----------------------
+    # Generate 2 Variations of Kicks
+    for v in [1, 2]:
+        path = STEMS_DIR / f"kick_techno_v{v}.wav"
+        if not path.exists(): generate_techno_kick(path, bpm=128, variant=v)
 
-    # Download one file per tag (first URL)
-    for tag, urls in DEMO_STEMS.items():
-        if not urls:
-            continue
-        url = urls[0]
-        out = STEMS_DIR / f"{tag}_demo_01.wav"
-        if out.exists():
-            continue
-        try:
-            download_file(url, out)
-        except Exception as e:
-            print(f"❌ Failed to download {url}: {e}")
+    # Generate 2 Variations of Bass
+    for v in [1, 2]:
+        path = STEMS_DIR / f"bass_techno_v{v}.wav"
+        if not path.exists(): generate_techno_bass(path, bpm=128, key_freq=49.0, variant=v)
+        
+    # Generate 2 Variations of Arps (Different scales/patterns)
+    for v in [1, 2]:
+        path = STEMS_DIR / f"arp_techno_v{v}.wav"
+        if not path.exists(): generate_techno_arp(path, bpm=128, key_freq=196.0, variant=v)
 
-    if not stems_exist():
-        raise RuntimeError(
-            f"Still no stems in {STEMS_DIR}. Either:\n"
-            f"- Add your own WAV stems to generator/free/assets/stems/\n"
-            f"- Or replace DEMO_STEMS URLs with valid WAV files.\n"
-        )
+    # -----------------------
+    # LO-FI LIBRARY (85 BPM)
+    # -----------------------
+    # Generate 2 Variations of Drums
+    for v in [1, 2]:
+        path = STEMS_DIR / f"drums_lofi_v{v}.wav"
+        if not path.exists(): generate_lofi_drums(path, bpm=85, variant=v)
+        
+    # Generate 2 Variations of Keys
+    for v in [1, 2]:
+        path = STEMS_DIR / f"keys_lofi_v{v}.wav"
+        if not path.exists(): generate_lofi_keys(path, bpm=85, key_freq=261.63, variant=v)
+        
+    # -----------------------
+    # AMBIENT LIBRARY
+    # -----------------------
+    if not (STEMS_DIR / "texture_vinyl.wav").exists():
+        generate_texture(STEMS_DIR / "texture_vinyl.wav", type='vinyl')
+    if not (STEMS_DIR / "texture_rain.wav").exists():
+        generate_texture(STEMS_DIR / "texture_rain.wav", type='rain')
 
-    print("✅ Demo stems ready.")
 
-
-def choose_stem(tag: str) -> Optional[Path]:
-    """
-    Stems must be named like:
-      drums_clean_01.wav
-      pad_warm_02.wav
-      ambience_rain_01.wav
-
-    We'll match by prefix tag_*
-    """
-    tag = _safe_tag(tag)
-    candidates = list(STEMS_DIR.glob(f"{tag}_*.wav"))
+def get_random_variant(prefix: str, rnd: random.Random) -> Path:
+    """Finds all files matching prefix and picks one."""
+    candidates = list(STEMS_DIR.glob(f"{prefix}*.wav"))
     if not candidates:
-        return None
+        raise RuntimeError(f"Missing stems for {prefix}. Run ensure_procedural_library first.")
     candidates.sort()
-    return random.choice(candidates)
-
+    return rnd.choice(candidates)
 
 def build_track(date: str, preset: dict, total_sec: int) -> tuple[Path, dict]:
     preset_id = preset["id"]
-    title = preset["title"]
-    category = preset["category"]
-
-    # deterministic-ish randomness per day+preset so daily is stable
-    rnd = random.Random(f"{date}:{preset_id}")
+    rnd = random.Random(f"{date}:{preset_id}") # Deterministic per day/preset
 
     require_ffmpeg()
     TMP.mkdir(parents=True, exist_ok=True)
     OUT.mkdir(parents=True, exist_ok=True)
 
-    stem_rules = preset.get("stem_rules", {})
+    ensure_procedural_library(date)
+
     selected: list[Path] = []
+    
+    # ---------------------------------------------------------
+    # DYNAMIC LOGIC: Pick Random Variants from Library
+    # ---------------------------------------------------------
+    
+    if "deep_work" in preset_id:
+        print(f"🎵 Building TECHNO track for {preset_id}")
+        # Mix and Match: Maybe Kick v1 + Bass v2 this time?
+        selected.append(get_random_variant("kick_techno", rnd))
+        selected.append(get_random_variant("bass_techno", rnd))
+        selected.append(get_random_variant("arp_techno", rnd))
+        
+    elif "study" in preset_id:
+        print(f"🎵 Building LO-FI track for {preset_id}")
+        selected.append(get_random_variant("drums_lofi", rnd))
+        selected.append(get_random_variant("keys_lofi", rnd))
+        selected.append(get_random_variant("texture_vinyl", rnd))
+        
+    elif "relax" in preset_id or "nature" in preset_id:
+        print(f"🎵 Building AMBIENT track for {preset_id}")
+        selected.append(get_random_variant("keys_lofi", rnd)) # Reuse keys for chill
+        selected.append(get_random_variant("texture_rain", rnd))
+        
+    else:
+        print(f"⚠️ Unknown preset type {preset_id}, using generic fallback.")
+        selected.append(get_random_variant("texture_vinyl", rnd))
 
-    # Select stems
-    for _channel, tags in stem_rules.items():
-        tags = tags or []
-        if not tags:
-            continue
-        tag = rnd.choice(tags)
-        stem = choose_stem(tag)
-        if stem:
-            selected.append(stem)
-
-    if not selected:
-        # Better error message now, showing available stems and requested tags.
-        available = [p.name for p in STEMS_DIR.glob("*.wav")]
-        raise RuntimeError(
-            f"No stems found for preset '{preset_id}'.\n"
-            f"Stems dir: {STEMS_DIR}\n"
-            f"Available stems: {available[:20]}{'...' if len(available) > 20 else ''}\n"
-            f"Preset stem_rules: {stem_rules}\n"
-        )
-
-    # Loop each stem to full duration
+    # Mix
     looped_paths: list[Path] = []
     for i, stem in enumerate(selected):
         out_wav = TMP / f"{date}_{preset_id}_{i}_loop.wav"
         ffmpeg_loop_to_duration(stem, out_wav, total_sec)
         looped_paths.append(out_wav)
 
-    # Mixdown
     mixed = TMP / f"{date}_{preset_id}_mix.wav"
     ffmpeg_mix(looped_paths, mixed)
 
-    # Fade
-    fade_in_ms = int(preset.get("fade_in_ms", 1200))
-    fade_out_ms = int(preset.get("fade_out_ms", 2500))
     faded = TMP / f"{date}_{preset_id}_fade.wav"
-    ffmpeg_fade(mixed, faded, fade_in_ms=fade_in_ms, fade_out_ms=fade_out_ms, total_sec=total_sec)
+    ffmpeg_fade(mixed, faded, fade_in_ms=1500, fade_out_ms=3000, total_sec=total_sec)
 
-    # Loudness normalize
-    target_lufs = float(preset.get("target_lufs", -14))
     normed = TMP / f"{date}_{preset_id}_norm.wav"
-    ffmpeg_loudnorm(faded, normed, target_lufs=target_lufs)
+    ffmpeg_loudnorm(faded, normed, target_lufs=-14.0)
 
-    # Encode MP3
-    bitrate = preset.get("export_bitrate", "192k")
     mp3 = OUT / f"free-{date}-{preset_id}.mp3"
-    ffmpeg_encode_mp3(normed, mp3, bitrate=bitrate)
+    ffmpeg_encode_mp3(normed, mp3, bitrate="192k")
 
+    # Catalog Entry
     entry = {
         "id": f"free-{date}-{preset_id}",
-        "title": title,
+        "title": preset["title"],
         "tier": "free",
         "date": date,
-        "category": category,
+        "category": preset["category"],
         "durationSec": total_sec,
-        "goalTags": preset.get("goalTags", []),
-        "natureTags": preset.get("natureTags", []),
-        "energyMin": int(preset.get("energyMin", 0)),
-        "energyMax": int(preset.get("energyMax", 100)),
-        "ambienceMin": int(preset.get("ambienceMin", 0)),
-        "ambienceMax": int(preset.get("ambienceMax", 100)),
         "url": None,
     }
     return mp3, entry
 
-
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--date", required=True, help="YYYY-MM-DD")
-    ap.add_argument("--duration-sec", type=int, default=3600, help="Free track duration (sec)")
-    ap.add_argument("--upload", action="store_true", help="Upload to R2 and update catalog")
+    ap.add_argument("--date", required=True)
+    ap.add_argument("--duration-sec", type=int, default=120)
+    ap.add_argument("--upload", action="store_true")
     args = ap.parse_args()
-
-    date = args.date
-    total_sec = args.duration_sec
-
-    # ✅ NEW: ensure stems exist for dev/test
-    ensure_demo_stems()
-
-    data = load_presets()
-    defaults = data.get("defaults", {})
-    presets = data.get("presets", [])
-
+    
     bucket = os.environ.get("R2_BUCKET")
-    if args.upload and not bucket:
-        raise RuntimeError("R2_BUCKET env var missing for upload mode.")
-
-    free_base = os.getenv("FREE_PUBLIC_BASE_URL", "").rstrip("/")
-
-    new_entries: list[dict] = []
-
+    data = load_presets()
+    presets = data.get("presets", [])
+    
     for p in presets:
-        merged = dict(defaults)
-        merged.update(p)
-        mp3, entry = build_track(date, merged, total_sec=total_sec)
-
-        if args.upload:
-            key = f"audio/free/{date}/{mp3.name}"
-            upload_file(mp3, bucket=bucket, key=key, public=True)
-
-            if free_base:
-                entry["url"] = f"{free_base}/{key}"
-            else:
-                entry["url"] = f"/{key}"
-
-        new_entries.append(entry)
-        print("✅ Built free track:", entry["id"], mp3)
-
-    if args.upload:
-        paths = get_catalog_paths()
-        existing = read_catalog(bucket, paths.free_key)
-        merged = upsert_tracks(existing, new_entries)
-        write_catalog(bucket, paths.free_key, merged)
-        print(f"✅ Updated catalog: s3://{bucket}/{paths.free_key} (count={len(merged)})")
-    else:
-        print("ℹ️ Run with --upload to push to R2 and update catalog.")
-
+        try:
+            mp3, entry = build_track(args.date, p, args.duration_sec)
+            print(f"✅ Generated: {mp3}")
+            if args.upload and bucket:
+                key = f"audio/free/{args.date}/{mp3.name}"
+                upload_file(mp3, bucket, key, public=True)
+        except Exception as e:
+            print(f"❌ Error {p['id']}: {e}")
 
 if __name__ == "__main__":
     main()
