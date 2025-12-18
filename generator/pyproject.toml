@@ -10,11 +10,15 @@ dependencies = [
   "pyyaml>=6.0.1",
   "pydub>=0.25.1",
   "numpy>=1.26.0",
+  "scipy>=1.11.0",
+  # Backend API (New)
+  "fastapi>=0.109.0",
+  "uvicorn>=0.27.0",
+  "python-multipart>=0.0.9",
   # Optional (premium GPU):
   "torch>=2.2.0",
   "transformers>=4.44.0",
   "accelerate>=0.33.0",
-  "scipy>=1.11.0", 
 ]
 
 [tool.uv]
