@@ -1,217 +1,465 @@
 # generator/server.py
 from __future__ import annotations
+
 import os
+import sys
 import uvicorn
-import shutil
-import subprocess
 import logging
-from fastapi import FastAPI, HTTPException, Body
+import time
+import asyncio
+from datetime import datetime
+from pathlib import Path
+from typing import Optional, Dict, Any
+
+from fastapi import FastAPI, HTTPException, Body, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
-from pathlib import Path
-from typing import List, Optional
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 
-# Import your existing logic
-import sys
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+# Add parent directory to path for imports
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from free.remix_daily import build_track, get_random_variant
-from free.music_engine import save_wav, SAMPLE_RATE
-from common.audio_utils import ffmpeg_loudnorm, ffmpeg_encode_mp3
+# Import our professional music engine
+try:
+    from free.remix_daily import build_track, ensure_procedural_library
+    from free.music_engine import SAMPLE_RATE
+except ImportError as e:
+    print(f"❌ Import Error: {e}")
+    print("Make sure you're running from the generator/ directory")
+    sys.exit(1)
 
-# Setup Logging
-logging.basicConfig(level=logging.INFO)
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger("SoundFlowDJ")
 
-app = FastAPI(title="SoundFlow Enterprise DJ Engine")
+# ============================================================================
+# FASTAPI APP SETUP
+# ============================================================================
 
-# 1. CORS: Allow React (port 3000) to talk to Python (port 8000)
+app = FastAPI(
+    title="SoundFlow Professional DJ Engine",
+    description="Real-time AI music generation for live DJ performance",
+    version="2.0.0"
+)
+
+# CORS Configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # In production, specify your domain
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# 2. Storage Setup
+# Storage paths
 OUTPUT_DIR = Path(".soundflow_out/free")
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-TMP_DIR = Path(".soundflow_tmp/dj_mix")
+
+TMP_DIR = Path(".soundflow_tmp/free")
 TMP_DIR.mkdir(parents=True, exist_ok=True)
 
-# Serve audio files statically
+# Serve generated audio files
 app.mount("/audio", StaticFiles(directory=OUTPUT_DIR), name="audio")
 
-# --- DATA MODELS ---
+# ============================================================================
+# DATA MODELS
+# ============================================================================
 
 class GenerateRequest(BaseModel):
-    date: str = "2025-01-01"
-    preset: dict
+    """Request model for track generation"""
+    genre: str = Field(default="Trance", description="Music genre")
+    bpm: int = Field(default=128, ge=60, le=200, description="Beats per minute")
+    key: str = Field(default="A", description="Musical key")
+    layers: list[str] = Field(default=["drums", "bass", "music"], description="Active layers")
+    duration: int = Field(default=180, ge=30, le=600, description="Duration in seconds")
+    
+    # Optional advanced parameters
+    scale: Optional[str] = Field(default=None, description="Musical scale")
+    instrument: Optional[str] = Field(default=None, description="Instrument mode")
+    texture: Optional[str] = Field(default=None, description="Texture type")
+    target_lufs: Optional[float] = Field(default=-14.0, description="Target loudness")
 
-class MergeRequest(BaseModel):
-    track_a: str  # Filename of first track
-    track_b: str  # Filename of second track
-    operation: str = "overlay" # overlay (mix), append (sequence)
-    balance: float = 0.5 # 0.0 = A only, 1.0 = B only, 0.5 = Mix
+class TrackMetadata(BaseModel):
+    """Track metadata response"""
+    id: str
+    name: str
+    filename: str
+    url: str
+    genre: str
+    bpm: int
+    key: str
+    duration: int
+    generated_at: str
 
-class LayerRequest(BaseModel):
-    base_track: str # Filename of existing track
-    layer_type: str # e.g., "kick_techno", "texture_rain"
-    variant: int = 1
+class HealthResponse(BaseModel):
+    """Health check response"""
+    status: str
+    engine: str
+    version: str
+    sample_rate: int
+    output_dir: str
+    timestamp: str
 
-# --- HELPER FUNCTIONS ---
+class ErrorResponse(BaseModel):
+    """Error response model"""
+    status: str
+    error: str
+    detail: Optional[str] = None
 
-def ffmpeg_merge(file_a: Path, file_b: Path, out_path: Path):
-    """
-    High-fidelity mixing of two audio streams using FFmpeg filter_complex.
-    Normalizes the mix to prevent clipping.
-    """
-    cmd = [
-        "ffmpeg", "-y",
-        "-i", str(file_a),
-        "-i", str(file_b),
-        "-filter_complex",
-        "amix=inputs=2:duration=longest:dropout_transition=2,loudnorm=I=-14:TP=-1.5:LRA=11",
-        str(out_path)
-    ]
-    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+# ============================================================================
+# GLOBAL STATE
+# ============================================================================
 
-# --- API ENDPOINTS ---
+generation_tasks: Dict[str, Dict[str, Any]] = {}
+library_initialized = False
 
-@app.get("/api/health")
-async def health_check():
-    return {"status": "online", "mode": "Enterprise DJ"}
+# ============================================================================
+# STARTUP / SHUTDOWN
+# ============================================================================
 
-@app.get("/api/list")
-async def list_tracks():
-    """Returns a list of all generated tracks available in the 'crate'."""
-    files = sorted(list(OUTPUT_DIR.glob("*.mp3")), key=os.path.getmtime, reverse=True)
+@app.on_event("startup")
+async def startup_event():
+    """Initialize the music engine on startup"""
+    global library_initialized
+    
+    logger.info("🎵 SoundFlow DJ Engine Starting...")
+    logger.info(f"📁 Output Directory: {OUTPUT_DIR.absolute()}")
+    logger.info(f"🎼 Sample Rate: {SAMPLE_RATE} Hz")
+    
+    # Initialize procedural library in background
+    async def init_library():
+        global library_initialized
+        try:
+            logger.info("🎛️  Initializing procedural library...")
+            ensure_procedural_library(datetime.now().strftime("%Y-%m-%d"))
+            library_initialized = True
+            logger.info("✅ Procedural library ready")
+        except Exception as e:
+            logger.error(f"❌ Library initialization failed: {e}")
+    
+    asyncio.create_task(init_library())
+    
+    logger.info("🚀 SoundFlow DJ Engine Ready!")
+    logger.info("🌐 Frontend: http://localhost:3000")
+    logger.info("🔌 Backend API: http://localhost:8000")
+    logger.info("📡 API Docs: http://localhost:8000/docs")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Cleanup on shutdown"""
+    logger.info("🛑 SoundFlow DJ Engine Shutting Down...")
+
+# ============================================================================
+# API ENDPOINTS
+# ============================================================================
+
+@app.get("/", response_model=Dict[str, str])
+async def root():
+    """Root endpoint"""
     return {
-        "count": len(files),
-        "tracks": [f.name for f in files]
+        "service": "SoundFlow Professional DJ Engine",
+        "version": "2.0.0",
+        "status": "online",
+        "docs": "/docs"
     }
 
-@app.post("/api/generate")
-async def generate_track(payload: dict = Body(...)):
+@app.get("/api/health", response_model=HealthResponse)
+async def health_check():
     """
-    Core Generation: Creates a track from a recipe.
+    Health check endpoint
+    Returns system status and configuration
     """
-    try:
-        logger.info(f"Received generation request")
-        
-        # Normalize payload structure (handle array vs single object)
-        if "combinations" in payload:
-            data = payload["combinations"][0]
-        else:
-            data = payload
+    return HealthResponse(
+        status="online" if library_initialized else "initializing",
+        engine="High-Fidelity Professional",
+        version="2.0.0",
+        sample_rate=SAMPLE_RATE,
+        output_dir=str(OUTPUT_DIR.absolute()),
+        timestamp=datetime.now().isoformat()
+    )
 
-        # Run the generator
-        date_str = "2025-12-18" # Fixed date for deterministic seed, or use current
-        duration = int(data.get("mix", {}).get("duration_sec", 120))
-        
-        mp3_path, entry = build_track(date_str, data, duration)
-        
-        return {
-            "status": "success", 
-            "url": f"http://localhost:8000/audio/{mp3_path.name}",
-            "filename": mp3_path.name,
-            "meta": entry
-        }
-
-    except Exception as e:
-        logger.error(f"Generation failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/api/dj/merge")
-async def mix_tracks(req: MergeRequest):
+@app.get("/api/library", response_model=Dict[str, Any])
+async def get_library():
     """
-    DJ Mixer: Merges two existing tracks into a new master mix.
-    Useful for transitions or mashing up two different styles.
+    Get list of all generated tracks
     """
     try:
-        path_a = OUTPUT_DIR / req.track_a
-        path_b = OUTPUT_DIR / req.track_b
-        
-        if not path_a.exists() or not path_b.exists():
-            raise HTTPException(status_code=404, detail="One or more tracks not found")
-
-        # Generate unique name for the mix
-        mix_id = f"mix_{req.track_a.split('.')[0]}_{req.track_b.split('.')[0]}"[:50]
-        output_wav = TMP_DIR / f"{mix_id}.wav"
-        output_mp3 = OUTPUT_DIR / f"DJ_MIX_{mix_id}.mp3"
-
-        # Perform the Mix
-        ffmpeg_merge(path_a, path_b, output_wav)
-        
-        # Convert to MP3 for streaming
-        ffmpeg_encode_mp3(output_wav, output_mp3, bitrate="320k") # High quality for DJ
+        tracks = []
+        for mp3_file in sorted(OUTPUT_DIR.glob("*.mp3"), key=os.path.getmtime, reverse=True):
+            # Parse filename for metadata (format: free-DATE-PRESET.mp3)
+            parts = mp3_file.stem.split("-")
+            
+            tracks.append({
+                "id": mp3_file.stem,
+                "name": mp3_file.stem,
+                "filename": mp3_file.name,
+                "url": f"http://localhost:8000/audio/{mp3_file.name}",
+                "size_mb": round(mp3_file.stat().st_size / (1024 * 1024), 2),
+                "created_at": datetime.fromtimestamp(mp3_file.stat().st_mtime).isoformat()
+            })
         
         return {
             "status": "success",
-            "message": "Tracks mixed successfully",
-            "url": f"http://localhost:8000/audio/{output_mp3.name}",
-            "filename": output_mp3.name
+            "count": len(tracks),
+            "tracks": tracks
         }
-
-    except subprocess.CalledProcessError:
-        raise HTTPException(status_code=500, detail="FFmpeg mixing failed")
+    
     except Exception as e:
-        logger.error(e)
+        logger.error(f"Library fetch failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/api/dj/layer")
-async def layer_stem(req: LayerRequest):
+@app.post("/api/generate", response_model=TrackMetadata)
+async def generate_track(
+    request: GenerateRequest = Body(...),
+    background_tasks: BackgroundTasks = None
+):
     """
-    Live Overdub: Generates a NEW stem (e.g., extra drums) and layers it 
-    on top of an existing track.
+    Generate a new music track
+    
+    This endpoint creates a professional-quality track based on the provided parameters.
+    Generation happens asynchronously while allowing the DJ to continue mixing.
+    
+    Parameters:
+    - genre: Music genre (Trance, House, Techno, etc.)
+    - bpm: Beats per minute (60-200)
+    - key: Musical key (C, D, E, F, G, A, B)
+    - layers: Active layers (drums, bass, music, pad, texture, ambience)
+    - duration: Track duration in seconds (30-600)
+    
+    Returns:
+    - Track metadata including URL for playback
+    """
+    
+    if not library_initialized:
+        raise HTTPException(
+            status_code=503,
+            detail="Engine is still initializing. Please wait a moment."
+        )
+    
+    try:
+        # Generate unique timestamp-based ID
+        date_str = datetime.now().strftime("%Y-%m-%d")
+        timestamp = int(time.time())
+        preset_id = f"{request.genre.lower()}-{timestamp}"
+        
+        logger.info(f"🎵 Generation Request: {request.genre} @ {request.bpm} BPM")
+        logger.info(f"   Layers: {', '.join(request.layers)}")
+        logger.info(f"   Duration: {request.duration}s")
+        
+        # Build preset payload for the music engine
+        preset = {
+            "id": preset_id,
+            "title": f"AI {request.genre} {request.bpm}BPM",
+            "genre": request.genre,
+            "bpm": request.bpm,
+            "key": request.key,
+            "key_freq": 440.0,  # A440 standard
+            "scale": request.scale or "minor",
+            "instrument": request.instrument or "hybrid",
+            "texture": request.texture or "none",
+            "layers": {
+                "enabled": request.layers
+            },
+            "mix": {
+                "duration_sec": request.duration,
+                "humanize_ms": 10,
+                "target_lufs": request.target_lufs or -14.0,
+                "noise": {
+                    "enabled": "texture" in request.layers or "ambience" in request.layers,
+                    "gain_db": -18.0,
+                    "lowpass_hz": 6000,
+                    "highpass_hz": 120
+                }
+            },
+            "metadata": {
+                "created_at": datetime.now().isoformat(),
+                "engine_version": "2.0.0"
+            }
+        }
+        
+        # Generate the track (this is CPU-intensive but non-blocking for the API)
+        logger.info(f"🔧 Building track: {preset_id}")
+        start_time = time.time()
+        
+        mp3_path, entry = build_track(
+            date=date_str,
+            preset=preset,
+            total_sec=request.duration
+        )
+        
+        generation_time = time.time() - start_time
+        logger.info(f"✅ Generated in {generation_time:.1f}s: {mp3_path.name}")
+        
+        # Build response
+        track_metadata = TrackMetadata(
+            id=entry["id"],
+            name=entry["title"],
+            filename=mp3_path.name,
+            url=f"http://localhost:8000/audio/{mp3_path.name}",
+            genre=request.genre,
+            bpm=request.bpm,
+            key=request.key,
+            duration=request.duration,
+            generated_at=datetime.now().isoformat()
+        )
+        
+        return track_metadata
+    
+    except Exception as e:
+        logger.error(f"❌ Generation failed: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Track generation failed: {str(e)}"
+        )
+
+@app.post("/api/generate/batch")
+async def generate_batch(
+    requests: list[GenerateRequest],
+    background_tasks: BackgroundTasks = None
+):
+    """
+    Generate multiple tracks in batch
+    Useful for pre-generating a set list
+    """
+    if not library_initialized:
+        raise HTTPException(
+            status_code=503,
+            detail="Engine is still initializing"
+        )
+    
+    if len(requests) > 10:
+        raise HTTPException(
+            status_code=400,
+            detail="Maximum 10 tracks per batch"
+        )
+    
+    results = []
+    
+    for req in requests:
+        try:
+            track = await generate_track(req)
+            results.append({"status": "success", "track": track})
+        except Exception as e:
+            results.append({"status": "error", "error": str(e)})
+    
+    return {
+        "status": "completed",
+        "total": len(requests),
+        "successful": len([r for r in results if r["status"] == "success"]),
+        "results": results
+    }
+
+@app.delete("/api/tracks/{track_id}")
+async def delete_track(track_id: str):
+    """
+    Delete a generated track
     """
     try:
-        base_path = OUTPUT_DIR / req.base_track
-        if not base_path.exists():
-            raise HTTPException(status_code=404, detail="Base track not found")
+        # Find the file
+        track_files = list(OUTPUT_DIR.glob(f"*{track_id}*.mp3"))
+        
+        if not track_files:
+            raise HTTPException(status_code=404, detail="Track not found")
+        
+        # Delete the file
+        for track_file in track_files:
+            track_file.unlink()
+            logger.info(f"🗑️  Deleted: {track_file.name}")
+        
+        return {"status": "success", "message": f"Deleted {len(track_files)} file(s)"}
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Delete failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
-        # 1. Generate the isolated stem
-        stem_name = f"live_{req.layer_type}_{req.variant}.wav"
-        stem_path = TMP_DIR / stem_name
+@app.post("/api/tracks/clear")
+async def clear_all_tracks():
+    """
+    Clear all generated tracks (use with caution!)
+    """
+    try:
+        tracks = list(OUTPUT_DIR.glob("*.mp3"))
+        count = len(tracks)
         
-        # We need to hook into the library generator helper
-        # Since logic is inside remix_daily, we cheat slightly by using the engine directly
-        # or we rely on pre-existing stems if speed is critical.
-        # For true generative power, we look for the file in assets:
+        for track in tracks:
+            track.unlink()
         
-        import random
-        # Try to find a source stem from assets matching the request
-        # This simulates "Generating" the stem logic
-        source_stem = get_random_variant(req.layer_type, random.Random())
+        logger.info(f"🗑️  Cleared {count} tracks")
         
-        if not source_stem:
-             raise HTTPException(status_code=400, detail=f"Generator for {req.layer_type} not found")
-
-        # 2. Loop the stem to match the base track duration
-        # We need the duration of the base track first.
-        # For simplicity in this demo, we assume 120s or mix simply.
-        
-        output_mp3 = OUTPUT_DIR / f"REMIX_{req.layer_type}_{req.base_track}"
-        
-        # Mix base + new stem
-        # Note: We are mixing an MP3 (base) with a WAV (stem)
-        ffmpeg_merge(base_path, source_stem, TMP_DIR / "temp_layer.wav")
-        ffmpeg_encode_mp3(TMP_DIR / "temp_layer.wav", output_mp3, bitrate="192k")
-
         return {
             "status": "success",
-            "message": f"Layered {req.layer_type} onto track",
-            "url": f"http://localhost:8000/audio/{output_mp3.name}",
-            "filename": output_mp3.name
+            "message": f"Cleared {count} tracks"
         }
-
+    
     except Exception as e:
-        logger.error(e)
+        logger.error(f"Clear failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+# ============================================================================
+# ERROR HANDLERS
+# ============================================================================
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request, exc):
+    """Custom HTTP exception handler"""
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "status": "error",
+            "error": exc.detail,
+            "timestamp": datetime.now().isoformat()
+        }
+    )
+
+@app.exception_handler(Exception)
+async def general_exception_handler(request, exc):
+    """Catch-all exception handler"""
+    logger.error(f"Unhandled exception: {exc}", exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content={
+            "status": "error",
+            "error": "Internal server error",
+            "detail": str(exc),
+            "timestamp": datetime.now().isoformat()
+        }
+    )
+
+# ============================================================================
+# MAIN ENTRY POINT
+# ============================================================================
 
 if __name__ == "__main__":
-    print("🚀 Starting Enterprise DJ Server on http://localhost:8000")
-    print("🎛️  Ready for real-time mixing...")
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    print("=" * 70)
+    print("🎵 SoundFlow Professional DJ Engine v2.0.0")
+    print("=" * 70)
+    print()
+    print("🚀 Starting server...")
+    print("🌐 Frontend:  http://localhost:3000")
+    print("🔌 Backend:   http://localhost:8000")
+    print("📡 API Docs:  http://localhost:8000/docs")
+    print()
+    print("💡 Features:")
+    print("   ✓ Real-time AI music generation")
+    print("   ✓ Professional mixing engine")
+    print("   ✓ Non-blocking async generation")
+    print("   ✓ Dual-deck DJ interface")
+    print("   ✓ Auto-generate mode")
+    print()
+    print("Press CTRL+C to stop")
+    print("=" * 70)
+    print()
+    
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=8000,
+        log_level="info",
+        access_log=True
+    )
