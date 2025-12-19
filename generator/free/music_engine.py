@@ -309,7 +309,7 @@ def apply_stereo_delay(audio: np.ndarray, bpm: float,
     
     return output
 
-def apply_sidechain_envelope(audio: np.ndarray, bpm: float, duck_amount: float = 0.7) -> np.ndarray:
+def apply_sidechain_envelope_old(audio: np.ndarray, bpm: float, duck_amount: float = 0.7) -> np.ndarray:
     """
     Creates sidechain compression envelope (for applying to bass/pads).
     This simulates the "pumping" effect in EDM.
@@ -336,6 +336,36 @@ def apply_sidechain_envelope(audio: np.ndarray, bpm: float, duck_amount: float =
     
     return audio * envelope
 
+def apply_sidechain_envelope(audio: np.ndarray, bpm: float, duck_amount: float = 0.7) -> np.ndarray:
+    """
+    Creates sidechain compression envelope (for applying to bass/pads).
+    This simulates the "pumping" effect in EDM.
+    """
+    beat_dur = 60.0 / bpm
+    beat_samples = int(beat_dur * SAMPLE_RATE)
+    
+    # Create ducking envelope
+    envelope = np.ones(len(audio), dtype=np.float32)
+    duck_len = int(SAMPLE_RATE * 0.15)  # 150ms duck
+    
+    # === FIX: Handle odd lengths correctly ===
+    half_len = duck_len // 2
+    rem_len = duck_len - half_len  # Ensures total equals duck_len
+    
+    # Number of beats in the audio
+    num_beats = len(audio) // beat_samples
+    
+    for i in range(num_beats):
+        start = i * beat_samples
+        if start + duck_len < len(envelope):
+            # Duck curve: 1.0 -> duck_amount -> 1.0
+            duck_curve = np.concatenate([
+                np.linspace(1.0, duck_amount, half_len) ** 2,
+                np.linspace(duck_amount, 1.0, rem_len) ** 2
+            ])
+            envelope[start:start + duck_len] = duck_curve
+            
+    return audio * envelope
 
 
 # =============================================================================
@@ -529,7 +559,7 @@ def generate_professional_kick(bpm: int = 128, style: str = "techno") -> np.ndar
 # GENRE-SPECIFIC GENERATORS (PROFESSIONAL QUALITY)
 # =============================================================================
 
-def generate_techno_kick(out_path: Path, bpm: int = 130, variant: int = 1):
+def generate_techno_kick_old(out_path: Path, bpm: int = 130, variant: int = 1):
     """Professional Techno Kick - Club Standard"""
     beat_dur = 60.0 / bpm
     total_samples = int(SAMPLE_RATE * beat_dur * 16)  # 4 bars
@@ -561,6 +591,47 @@ def generate_techno_kick(out_path: Path, bpm: int = 130, variant: int = 1):
     # Save sidechain envelope for mixing
     sc_path = out_path.parent / f"{out_path.stem}_sidechain.npy"
     np.save(sc_path, sidechain_env)
+
+
+def generate_techno_kick(out_path: Path, bpm: int = 130, variant: int = 1):
+    """Professional Techno Kick - Club Standard"""
+    beat_dur = 60.0 / bpm
+    total_samples = int(SAMPLE_RATE * beat_dur * 16)  # 4 bars
+    audio = np.zeros(total_samples, dtype=np.float32)
+    
+    # Generate kick
+    kick = generate_professional_kick(bpm, style="techno")
+    
+    # Place kicks on grid (4-on-the-floor)
+    for i in range(16):
+        start = int(i * beat_dur * SAMPLE_RATE)
+        if start + len(kick) < len(audio):
+            audio[start:start + len(kick)] += kick
+            
+    # Create sidechain envelope for export
+    sidechain_env = np.ones(total_samples, dtype=np.float32)
+    duck_len = int(SAMPLE_RATE * 0.15)
+    
+    # === FIX: Handle odd lengths correctly ===
+    half_len = duck_len // 2
+    rem_len = duck_len - half_len  # Ensures total equals duck_len
+
+    for i in range(16):
+        start = int(i * beat_dur * SAMPLE_RATE)
+        if start + duck_len < len(sidechain_env):
+            duck_curve = np.concatenate([
+                np.linspace(1.0, 0.3, half_len) ** 2,
+                np.linspace(0.3, 1.0, rem_len) ** 2
+            ])
+            sidechain_env[start:start + duck_len] = duck_curve
+            
+    save_wav(out_path, audio)
+    
+    # Save sidechain envelope for mixing
+    sc_path = out_path.parent / f"{out_path.stem}_sidechain.npy"
+    np.save(sc_path, sidechain_env)
+
+
 
 def generate_techno_bass(out_path: Path, bpm: int = 128, key_freq: float = 49.0, variant: int = 1):
     """Rolling Techno Bass with Anti-Aliased Synthesis"""
