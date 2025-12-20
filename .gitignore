@@ -62,3 +62,4 @@ generator/free/assets/soundfonts/
 /generator/.soundflow_out
 /generator/.soundflow_tmp
 generator/uv.lock
+/generator/api_test_outputs

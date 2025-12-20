@@ -1,110 +1,145 @@
 "use client";
 
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
-import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { Progress } from "@/components/ui/progress";
 import {
-  Play,
-  Pause,
-  SkipForward,
-  Volume2,
-  VolumeX,
-  Zap,
-  Settings,
-  Download,
-  Disc3,
   Activity,
-  Radio,
-  Sparkles,
-  Moon,
-  Sun,
-  Maximize2,
+  Disc3,
   Headphones,
-  Filter,
-  Repeat,
-  AlertCircle,
-  CheckCircle,
   Loader2,
+  Moon,
   Music,
-  Layers,
-  Sliders,
-  Brain,
-  CloudRain,
-  Waves,
-  Mic2,
+  Pause,
+  Play,
+  Repeat,
+  Settings,
+  Sun,
+  Volume2,
+  Zap,
+  Wand2,
+  TimerReset,
   Gauge,
-  TrendingUp,
-  Wind,
-  AlignLeft,
+  Merge,
 } from "lucide-react";
 
-// ============================================================================
-// TYPES & CONSTANTS
-// ============================================================================
+import Studio, { Track } from "@/components/studio";
 
-interface Track {
-  id: string;
-  name: string;
-  url: string;
-  bpm: number;
-  key: string;
-  genre: string;
-  duration: number;
-  waveform?: number[];
-}
+// ============================================================================
+// TYPES
+// ============================================================================
 
 interface DeckState {
   track: Track | null;
   isPlaying: boolean;
-  volume: number;
-  eq: { low: number; mid: number; high: number };
-  tempo: number;
-  cuePoint: number;
-  loop: { enabled: boolean; start: number; end: number };
-}
-
-interface GenerationRequest {
-  genre: string;
-  bpm: number;
-  key: string;
-  layers: string[];
+  volume: number; // 0..100
+  eq: { low: number; mid: number; high: number }; // 0..100
+  tempo: number; // 50..150 (%)
+  cuePoint: number; // seconds
+  loop: { enabled: boolean; start: number; end: number }; // seconds
+  currentTime: number;
   duration: number;
-  // Focus Engine Parameters
-  binaural?: string;
-  ambience?: { rain: number; vinyl: number; white: number };
-  // Smart Mixer Parameters
-  intensity?: number;
-  synthParams?: {
-    cutoff: number;
-    resonance: number;
-    drive: number;
-    space: number;
-  };
-  energyCurve?: string;
 }
 
-const GENRES = ["Trance", "House", "Techno", "Deep", "Bass", "Ambient", "Hard", "Chillout"];
-const KEYS = ["C", "D", "E", "F", "G", "A", "B"];
-const LAYERS = ["drums", "bass", "music", "pad", "texture"];
-
-const API_BASE = "http://localhost:8000";
+interface LibraryInterfaceProps {
+  tracks: Track[];
+  onLoadTrack: (track: Track, deck: "A" | "B") => void;
+  isDarkMode: boolean;
+}
 
 // ============================================================================
-// MAIN COMPONENT
+// HELPERS
+// ============================================================================
+
+const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
+const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+
+const formatTime = (seconds: number) => {
+  if (!seconds || isNaN(seconds)) return "0:00";
+  const s = Math.max(0, seconds);
+  const m = Math.floor(s / 60);
+  const r = Math.floor(s % 60);
+  return `${m}:${r.toString().padStart(2, "0")}`;
+};
+
+// deterministic pseudo-random (seeded) for waveform bars
+function mulberry32(seed: number) {
+  return function () {
+    let t = (seed += 0x6d2b79f5);
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const seedFromString = (s: string) => {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+};
+
+// Equal-power crossfade (sounds better than linear)
+const equalPowerGains = (x01: number) => {
+  const x = clamp01(x01);
+  const a = Math.cos(x * Math.PI * 0.5);
+  const b = Math.sin(x * Math.PI * 0.5);
+  return { a, b };
+};
+
+// Spectrum bands helper (real analyser -> 36 bars)
+const BAND_COUNT = 36;
+const makeBands = (fft: Uint8Array, bandCount: number, prev: number[]) => {
+  const out = new Array(bandCount).fill(0);
+  const n = fft.length;
+
+  for (let b = 0; b < bandCount; b++) {
+    const t0 = b / bandCount;
+    const t1 = (b + 1) / bandCount;
+
+    // square curve biases low freqs (more bass detail)
+    const i0 = Math.floor((t0 * t0) * (n - 1));
+    const i1 = Math.max(i0 + 1, Math.floor((t1 * t1) * (n - 1)));
+
+    let sum = 0;
+    for (let i = i0; i <= i1; i++) sum += fft[i];
+    const avg = sum / (i1 - i0 + 1); // 0..255
+
+    const v01 = avg / 255;
+    const curved = Math.pow(v01, 0.7) * 100; // 0..100, nicer visual curve
+
+    // Smooth (attack faster than release)
+    const p = prev?.[b] ?? 0;
+    const attack = 0.35;
+    const release = 0.12;
+    const alpha = curved > p ? attack : release;
+
+    // noise gate
+    const gated = curved < 2.2 ? 0 : curved;
+
+    out[b] = p + (gated - p) * alpha;
+  }
+
+  return out;
+};
+
+// ============================================================================
+// MAIN
 // ============================================================================
 
 export default function DJDashboard() {
   // Theme
   const [isDarkMode, setIsDarkMode] = useState(true);
 
-  // Decks
+  // View
+  const [activeView, setActiveView] = useState<"mixer" | "generator" | "library">("mixer");
+
+  // Deck states
   const [deckA, setDeckA] = useState<DeckState>({
     track: null,
     isPlaying: false,
@@ -113,6 +148,8 @@ export default function DJDashboard() {
     tempo: 100,
     cuePoint: 0,
     loop: { enabled: false, start: 0, end: 0 },
+    currentTime: 0,
+    duration: 0,
   });
 
   const [deckB, setDeckB] = useState<DeckState>({
@@ -123,619 +160,681 @@ export default function DJDashboard() {
     tempo: 100,
     cuePoint: 0,
     loop: { enabled: false, start: 0, end: 0 },
+    currentTime: 0,
+    duration: 0,
   });
 
   // Mixer
   const [crossfader, setCrossfader] = useState(50);
   const [masterVolume, setMasterVolume] = useState(80);
-  const [masterEQ, setMasterEQ] = useState({ low: 50, mid: 50, high: 50 });
+  const [aiMixing, setAiMixing] = useState(false);
 
-  // Effects
-  const [effects, setEffects] = useState({
-    reverb: 0,
-    delay: 0,
-    filter: 50,
-    enabled: false,
-  });
-
-  // Generation
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [generationQueue, setGenerationQueue] = useState<GenerationRequest[]>([]);
+  // Library
   const [generatedTracks, setGeneratedTracks] = useState<Track[]>([]);
   const [autoGenerate, setAutoGenerate] = useState(false);
 
-  // AI Assistant
-  const [aiMixing, setAiMixing] = useState(false);
-  const [aiSuggestions, setAiSuggestions] = useState<string[]>([]);
-
-  // UI State
-  const [activeView, setActiveView] = useState<"mixer" | "generator" | "library">("mixer");
-  const [showSettings, setShowSettings] = useState(false);
+  // meters (0..100)
   const [vuMeterA, setVuMeterA] = useState(0);
   const [vuMeterB, setVuMeterB] = useState(0);
+  const [masterMeter, setMasterMeter] = useState(0);
 
-  // Audio References
+  // ✅ Real spectrum bars (0..100 each)
+  const [masterBands, setMasterBands] = useState<number[]>(() => Array(BAND_COUNT).fill(0));
+
+  // Audio elements
   const audioA = useRef<HTMLAudioElement | null>(null);
   const audioB = useRef<HTMLAudioElement | null>(null);
-  const audioContextRef = useRef<AudioContext | null>(null);
 
-  // ============================================================================
-  // AUDIO ENGINE SETUP
-  // ============================================================================
+  // WebAudio graph
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const sourceARef = useRef<MediaElementAudioSourceNode | null>(null);
+  const sourceBRef = useRef<MediaElementAudioSourceNode | null>(null);
+
+  const gainARef = useRef<GainNode | null>(null);
+  const gainBRef = useRef<GainNode | null>(null);
+  const masterGainRef = useRef<GainNode | null>(null);
+
+  const analyserARef = useRef<AnalyserNode | null>(null);
+  const analyserBRef = useRef<AnalyserNode | null>(null);
+  const analyserMasterRef = useRef<AnalyserNode | null>(null);
+
+  const rafRef = useRef<number | null>(null);
+
+  // ========================================================================
+  // Init Audio + WebAudio routing
+  // ========================================================================
 
   useEffect(() => {
-    if (typeof window !== "undefined" && !audioContextRef.current) {
-      audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
-    }
+    if (typeof window === "undefined") return;
 
     if (!audioA.current) {
       audioA.current = new Audio();
       audioA.current.crossOrigin = "anonymous";
+      audioA.current.preload = "auto";
     }
     if (!audioB.current) {
       audioB.current = new Audio();
       audioB.current.crossOrigin = "anonymous";
+      audioB.current.preload = "auto";
     }
 
+    if (!audioCtxRef.current) {
+      audioCtxRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+    }
+    const ctx = audioCtxRef.current!;
+
+    // Build graph once
+    if (!masterGainRef.current) {
+      const masterGain = ctx.createGain();
+      masterGain.gain.value = 0.8;
+
+      const gainA = ctx.createGain();
+      const gainB = ctx.createGain();
+      gainA.gain.value = 0.5;
+      gainB.gain.value = 0.5;
+
+      const analyserA = ctx.createAnalyser();
+      const analyserB = ctx.createAnalyser();
+      const analyserMaster = ctx.createAnalyser();
+      analyserA.fftSize = 2048;
+      analyserB.fftSize = 2048;
+      analyserMaster.fftSize = 2048;
+
+      gainA.connect(analyserA);
+      analyserA.connect(masterGain);
+
+      gainB.connect(analyserB);
+      analyserB.connect(masterGain);
+
+      masterGain.connect(analyserMaster);
+      analyserMaster.connect(ctx.destination);
+
+      masterGainRef.current = masterGain;
+      gainARef.current = gainA;
+      gainBRef.current = gainB;
+      analyserARef.current = analyserA;
+      analyserBRef.current = analyserB;
+      analyserMasterRef.current = analyserMaster;
+    }
+
+    // Create sources once per audio element
+    try {
+      if (audioA.current && !sourceARef.current) {
+        sourceARef.current = ctx.createMediaElementSource(audioA.current);
+        sourceARef.current.connect(gainARef.current!);
+      }
+      if (audioB.current && !sourceBRef.current) {
+        sourceBRef.current = ctx.createMediaElementSource(audioB.current);
+        sourceBRef.current.connect(gainBRef.current!);
+      }
+    } catch (e) {
+      console.warn("WebAudio source init warning:", e);
+    }
+
+    // Make sure element volumes are 1.0 (we control via WebAudio)
+    if (audioA.current) audioA.current.volume = 1;
+    if (audioB.current) audioB.current.volume = 1;
+
+    // timeupdate listeners
+    const updateTimeA = () => {
+      const el = audioA.current;
+      if (!el) return;
+      setDeckA((p) => ({
+        ...p,
+        currentTime: el.currentTime,
+        duration: el.duration || p.track?.duration || 0,
+      }));
+    };
+    const updateTimeB = () => {
+      const el = audioB.current;
+      if (!el) return;
+      setDeckB((p) => ({
+        ...p,
+        currentTime: el.currentTime,
+        duration: el.duration || p.track?.duration || 0,
+      }));
+    };
+
+    audioA.current?.addEventListener("timeupdate", updateTimeA);
+    audioB.current?.addEventListener("timeupdate", updateTimeB);
+    audioA.current?.addEventListener("loadedmetadata", updateTimeA);
+    audioB.current?.addEventListener("loadedmetadata", updateTimeB);
+
+    // Meter loop using analyzers
+    const bufA = new Uint8Array(analyserARef.current!.frequencyBinCount);
+    const bufB = new Uint8Array(analyserBRef.current!.frequencyBinCount);
+    const bufM = new Uint8Array(analyserMasterRef.current!.frequencyBinCount);
+
+    const rmsToPercent = (arr: Uint8Array) => {
+      let sum = 0;
+      for (let i = 0; i < arr.length; i++) {
+        const v = arr[i] / 255;
+        sum += v * v;
+      }
+      const rms = Math.sqrt(sum / arr.length);
+      const p = Math.pow(rms, 0.6) * 100;
+      return clamp(p, 0, 100);
+    };
+
+    const tick = () => {
+      const a = analyserARef.current;
+      const b = analyserBRef.current;
+      const m = analyserMasterRef.current;
+
+      if (a && b && m) {
+        a.getByteFrequencyData(bufA);
+        b.getByteFrequencyData(bufB);
+        m.getByteFrequencyData(bufM);
+
+        const vA = rmsToPercent(bufA);
+        const vB = rmsToPercent(bufB);
+        const vM = rmsToPercent(bufM);
+
+        setVuMeterA(vA < 1.5 ? 0 : vA);
+        setVuMeterB(vB < 1.5 ? 0 : vB);
+        setMasterMeter(vM < 1.5 ? 0 : vM);
+
+        setMasterBands((prev) => makeBands(bufM, BAND_COUNT, prev));
+      }
+
+      rafRef.current = requestAnimationFrame(tick);
+    };
+
+    rafRef.current = requestAnimationFrame(tick);
+
     return () => {
-      if (audioA.current) {
-        audioA.current.pause();
-        audioA.current.src = "";
-      }
-      if (audioB.current) {
-        audioB.current.pause();
-        audioB.current.src = "";
-      }
+      audioA.current?.removeEventListener("timeupdate", updateTimeA);
+      audioB.current?.removeEventListener("timeupdate", updateTimeB);
+
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+
+      if (audioA.current) audioA.current.pause();
+      if (audioB.current) audioB.current.pause();
     };
   }, []);
 
-  // ============================================================================
-  // DECK CONTROLS
-  // ============================================================================
+  // ========================================================================
+  // Volume / Crossfader (WebAudio gains)
+  // ========================================================================
 
-  const loadTrackToDeck = useCallback((track: Track, deck: "A" | "B") => {
-    const audioElement = deck === "A" ? audioA.current : audioB.current;
-    const setDeck = deck === "A" ? setDeckA : setDeckB;
+  const updateGains = useCallback(() => {
+    const ctx = audioCtxRef.current;
+    const gainA = gainARef.current;
+    const gainB = gainBRef.current;
+    const masterGain = masterGainRef.current;
+    if (!ctx || !gainA || !gainB || !masterGain) return;
 
-    if (audioElement) {
-      audioElement.src = track.url;
-      audioElement.load();
+    const x = clamp(crossfader, 0, 100) / 100;
+    const { a, b } = equalPowerGains(x);
+
+    const m = clamp(masterVolume, 0, 100) / 100;
+    const va = clamp(deckA.volume, 0, 100) / 100;
+    const vb = clamp(deckB.volume, 0, 100) / 100;
+
+    const t = ctx.currentTime;
+    const smooth = 0.03;
+
+    masterGain.gain.setTargetAtTime(m, t, smooth);
+    gainA.gain.setTargetAtTime(va * a, t, smooth);
+    gainB.gain.setTargetAtTime(vb * b, t, smooth);
+  }, [crossfader, masterVolume, deckA.volume, deckB.volume]);
+
+  useEffect(() => {
+    updateGains();
+  }, [updateGains]);
+
+  // ========================================================================
+  // Deck Controls
+  // ========================================================================
+
+  const resumeAudioContext = useCallback(async () => {
+    const ctx = audioCtxRef.current;
+    if (!ctx) return;
+    if (ctx.state === "suspended") {
+      try {
+        await ctx.resume();
+      } catch (e) {
+        console.warn("AudioContext resume failed:", e);
+      }
+    }
+  }, []);
+
+  const loadTrackToDeck = useCallback(
+    async (track: Track, deck: "A" | "B") => {
+      await resumeAudioContext();
+
+      const audioEl = deck === "A" ? audioA.current : audioB.current;
+      const setDeck = deck === "A" ? setDeckA : setDeckB;
+
+      if (!audioEl) return;
+
+      audioEl.pause();
+      audioEl.currentTime = 0;
+
+      audioEl.src = track.url;
+      audioEl.load();
 
       setDeck((prev) => ({
         ...prev,
         track,
         isPlaying: false,
+        currentTime: 0,
+        duration: track.duration || 0,
       }));
-    }
+
+      updateGains();
+    },
+    [resumeAudioContext, updateGains]
+  );
+
+  const togglePlay = useCallback(
+    async (deck: "A" | "B") => {
+      await resumeAudioContext();
+
+      const audioEl = deck === "A" ? audioA.current : audioB.current;
+      const setDeck = deck === "A" ? setDeckA : setDeckB;
+      if (!audioEl || !audioEl.src) return;
+
+      const tempo = deck === "A" ? deckA.tempo : deckB.tempo;
+      audioEl.playbackRate = clamp(tempo, 50, 150) / 100;
+
+      if (audioEl.paused) {
+        try {
+          await audioEl.play();
+          setDeck((p) => ({ ...p, isPlaying: true }));
+        } catch (e) {
+          console.error("Playback failed:", e);
+        }
+      } else {
+        audioEl.pause();
+        setDeck((p) => ({ ...p, isPlaying: false }));
+      }
+    },
+    [resumeAudioContext, deckA.tempo, deckB.tempo]
+  );
+
+  const stopDeck = useCallback((deck: "A" | "B") => {
+    const audioEl = deck === "A" ? audioA.current : audioB.current;
+    const setDeck = deck === "A" ? setDeckA : setDeckB;
+    if (!audioEl) return;
+    audioEl.pause();
+    audioEl.currentTime = 0;
+    setDeck((p) => ({ ...p, isPlaying: false, currentTime: 0 }));
   }, []);
 
-  const togglePlay = useCallback((deck: "A" | "B") => {
-    const audioElement = deck === "A" ? audioA.current : audioB.current;
-    const currentDeck = deck === "A" ? deckA : deckB;
+  const handleSeek = useCallback((deck: "A" | "B", value: number) => {
+    const audioEl = deck === "A" ? audioA.current : audioB.current;
+    if (!audioEl || !audioEl.duration) return;
+    audioEl.currentTime = clamp(value, 0, audioEl.duration);
+  }, []);
+
+  const setCue = useCallback((deck: "A" | "B") => {
+    const audioEl = deck === "A" ? audioA.current : audioB.current;
     const setDeck = deck === "A" ? setDeckA : setDeckB;
+    if (!audioEl) return;
+    setDeck((p) => ({ ...p, cuePoint: audioEl.currentTime }));
+  }, []);
 
-    if (!audioElement || !currentDeck.track) return;
+  const jumpToCue = useCallback(
+    (deck: "A" | "B") => {
+      const audioEl = deck === "A" ? audioA.current : audioB.current;
+      const state = deck === "A" ? deckA : deckB;
+      if (!audioEl) return;
+      audioEl.currentTime = clamp(state.cuePoint || 0, 0, audioEl.duration || 999999);
+    },
+    [deckA, deckB]
+  );
 
-    if (currentDeck.isPlaying) {
-      audioElement.pause();
-      setDeck((prev) => ({ ...prev, isPlaying: false }));
-    } else {
-      audioElement.play().catch((err) => console.error("Playback error:", err));
-      setDeck((prev) => ({ ...prev, isPlaying: true }));
-    }
-  }, [deckA, deckB]);
-
-  const setDeckVolume = useCallback((deck: "A" | "B", volume: number) => {
-    const audioElement = deck === "A" ? audioA.current : audioB.current;
+  const toggleLoop = useCallback((deck: "A" | "B") => {
+    const audioEl = deck === "A" ? audioA.current : audioB.current;
     const setDeck = deck === "A" ? setDeckA : setDeckB;
+    if (!audioEl) return;
 
-    if (audioElement) {
-      const crossfaderGain = deck === "A" ? (100 - crossfader) / 100 : crossfader / 100;
-      const finalVolume = (volume / 100) * (masterVolume / 100) * crossfaderGain;
-      audioElement.volume = Math.max(0, Math.min(1, finalVolume));
-    }
-
-    setDeck((prev) => ({ ...prev, volume }));
-  }, [crossfader, masterVolume]);
-
-  useEffect(() => {
-    setDeckVolume("A", deckA.volume);
-    setDeckVolume("B", deckB.volume);
-  }, [crossfader, masterVolume, deckA.volume, deckB.volume, setDeckVolume]);
-
-  // VU Meter simulation
-  useEffect(() => {
-    const interval = setInterval(() => {
-      if (deckA.isPlaying) {
-        setVuMeterA(Math.random() * 60 + 40);
-      } else {
-        setVuMeterA(Math.max(0, vuMeterA - 10));
-      }
-
-      if (deckB.isPlaying) {
-        setVuMeterB(Math.random() * 60 + 40);
-      } else {
-        setVuMeterB(Math.max(0, vuMeterB - 10));
-      }
-    }, 100);
-
-    return () => clearInterval(interval);
-  }, [deckA.isPlaying, deckB.isPlaying]);
-
-  // ============================================================================
-  // MUSIC GENERATION
-  // ============================================================================
-
-  const generateTrack = useCallback(async (request: GenerationRequest) => {
-    setIsGenerating(true);
-
-    try {
-      // Validate backend is reachable
-      const healthCheck = await fetch(`${API_BASE}/api/health`).catch(() => null);
-      if (!healthCheck || !healthCheck.ok) {
-        throw new Error("Backend server is not running. Please start server.py");
-      }
-
-      // Build payload matching backend GenerateRequest model
-      const payload = {
-        genre: request.genre,
-        bpm: request.bpm,
-        key: request.key,
-        layers: request.layers,
-        duration: request.duration,
-        scale: "minor",
-        instrument: "hybrid",
-        texture: "none",
-        target_lufs: -14.0,
-        // NEW: Focus Engine & Smart Mixer params
-        binaural: request.binaural || "off",
-        ambience: request.ambience || { rain: 0, vinyl: 0, white: 0 },
-        intensity: request.intensity || 50,
-        synthParams: request.synthParams || { cutoff: 75, resonance: 30, drive: 10, space: 20 },
-        energyCurve: request.energyCurve || "peak",
+    setDeck((p) => {
+      const enabled = !p.loop.enabled;
+      const dur = audioEl.duration || p.duration || 0;
+      const end = clamp(audioEl.currentTime || 0, 0, dur);
+      const start = clamp(end - 8, 0, dur);
+      return {
+        ...p,
+        loop: enabled ? { enabled: true, start, end } : { ...p.loop, enabled: false },
       };
+    });
+  }, []);
 
-      console.log("🎵 Generating track:", payload);
-
-      const response = await fetch(`${API_BASE}/api/generate`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
-        body: JSON.stringify(payload),
-      });
-
-      if (!response.ok) {
-        let errorMessage = "Generation failed";
-        try {
-          const errorData = await response.json();
-          errorMessage = errorData.detail || errorData.error || errorMessage;
-        } catch (e) {
-          errorMessage = `HTTP ${response.status}: ${response.statusText}`;
-        }
-        throw new Error(errorMessage);
-      }
-
-      const data = await response.json();
-      console.log("✅ Track generated:", data.filename);
-
-      const newTrack: Track = {
-        id: data.id,
-        name: data.name,
-        url: data.url,
-        bpm: data.bpm,
-        key: data.key,
-        genre: data.genre,
-        duration: data.duration,
-      };
-
-      setGeneratedTracks((prev) => [newTrack, ...prev]);
-      setIsGenerating(false);
-
-      // Auto-load to empty deck
-      if (!deckA.track) {
-        console.log("📀 Loading to Deck A");
-        loadTrackToDeck(newTrack, "A");
-      } else if (!deckB.track) {
-        console.log("📀 Loading to Deck B");
-        loadTrackToDeck(newTrack, "B");
-      }
-
-      return newTrack;
-    } catch (error) {
-      console.error("❌ Generation error:", error);
-      setIsGenerating(false);
-
-      const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
-
-      alert(`❌ Generation Failed\n\n${errorMessage}\n\nCheck console for details.`);
-      throw error;
-    }
-  }, [deckA.track, deckB.track, loadTrackToDeck]);
-
-  // Auto-generate next track when current is near end
   useEffect(() => {
-    if (!autoGenerate) return;
-
-    const checkInterval = setInterval(() => {
-      const audioElement = deckA.isPlaying ? audioA.current : audioB.current;
-      if (!audioElement) return;
-
-      const remaining = audioElement.duration - audioElement.currentTime;
-
-      if (remaining > 0 && remaining < 30 && !isGenerating) {
-        const currentGenre = deckA.track?.genre || "Trance";
-        const currentBPM = deckA.track?.bpm || 128;
-
-        generateTrack({
-          genre: currentGenre,
-          bpm: currentBPM,
-          key: "A",
-          layers: ["drums", "bass", "music"],
-          duration: 180,
-        });
+    const id = window.setInterval(() => {
+      const elA = audioA.current;
+      const elB = audioB.current;
+      if (elA && deckA.loop.enabled && deckA.loop.end > deckA.loop.start) {
+        if (elA.currentTime >= deckA.loop.end) elA.currentTime = deckA.loop.start;
       }
-    }, 5000);
+      if (elB && deckB.loop.enabled && deckB.loop.end > deckB.loop.start) {
+        if (elB.currentTime >= deckB.loop.end) elB.currentTime = deckB.loop.start;
+      }
+    }, 50);
+    return () => window.clearInterval(id);
+  }, [deckA.loop, deckB.loop]);
 
-    return () => clearInterval(checkInterval);
-  }, [autoGenerate, deckA.isPlaying, deckA.track, isGenerating, generateTrack]);
+  const setTempo = useCallback((deck: "A" | "B", tempo: number) => {
+    const audioEl = deck === "A" ? audioA.current : audioB.current;
+    const setDeck = deck === "A" ? setDeckA : setDeckB;
+    const t = clamp(tempo, 50, 150);
+    setDeck((p) => ({ ...p, tempo: t }));
+    if (audioEl) audioEl.playbackRate = t / 100;
+  }, []);
 
-  // ============================================================================
-  // AI MIXING ASSISTANT
-  // ============================================================================
-
-  const performAIMix = useCallback(() => {
+  const syncTempo = useCallback(() => {
     if (!deckA.track || !deckB.track) return;
+    const target = deckA.isPlaying ? deckA.tempo : deckB.tempo;
+    setTempo("A", target);
+    setTempo("B", target);
+  }, [deckA.track, deckB.track, deckA.isPlaying, deckA.tempo, deckB.tempo, setTempo]);
 
+  // ========================================================================
+  // Studio Link
+  // ========================================================================
+
+  const handleTrackGenerated = useCallback(
+    (newTrack: Track) => {
+      setGeneratedTracks((prev) => [newTrack, ...prev]);
+      if (!deckA.track) loadTrackToDeck(newTrack, "A");
+      else if (!deckB.track) loadTrackToDeck(newTrack, "B");
+      else if (autoGenerate) {
+        loadTrackToDeck(newTrack, crossfader < 50 ? "B" : "A");
+      }
+    },
+    [deckA.track, deckB.track, loadTrackToDeck, autoGenerate, crossfader]
+  );
+
+  // ========================================================================
+  // AI Auto-mix
+  // ========================================================================
+
+  const performAIMix = useCallback(async () => {
+    if (!deckA.track || !deckB.track || aiMixing) return;
     setAiMixing(true);
+    await resumeAudioContext();
 
-    setTimeout(() => {
-      const startCrossfader = crossfader;
-      const targetCrossfader = deckA.isPlaying ? 100 : 0;
-      const steps = 80;
+    const start = clamp(crossfader, 0, 100);
+    const target = start < 50 ? 100 : 0;
 
-      let currentStep = 0;
-      const fadeInterval = setInterval(() => {
-        currentStep++;
-        const progress = currentStep / steps;
-        const newValue = startCrossfader + (targetCrossfader - startCrossfader) * progress;
-        setCrossfader(newValue);
+    if (target === 100 && !deckB.isPlaying) await togglePlay("B");
+    if (target === 0 && !deckA.isPlaying) await togglePlay("A");
 
-        if (currentStep >= steps) {
-          clearInterval(fadeInterval);
-          setAiMixing(false);
+    const durationMs = 5500;
+    const startTs = performance.now();
 
-          if (targetCrossfader === 100 && !deckB.isPlaying) {
-            togglePlay("B");
-          } else if (targetCrossfader === 0 && !deckA.isPlaying) {
-            togglePlay("A");
-          }
-        }
-      }, 100);
-    }, 500);
-  }, [deckA, deckB, crossfader, togglePlay]);
+    const step = () => {
+      const now = performance.now();
+      const p = clamp((now - startTs) / durationMs, 0, 1);
+      const s = p * p * (3 - 2 * p); // smoothstep
+      const val = start + (target - start) * s;
+      setCrossfader(val);
 
-  // ============================================================================
-  // THEME TOGGLE
-  // ============================================================================
+      if (p < 1) {
+        requestAnimationFrame(step);
+      } else {
+        if (target === 100) stopDeck("A");
+        else stopDeck("B");
+        setAiMixing(false);
+      }
+    };
 
-  useEffect(() => {
-    if (isDarkMode) {
-      document.documentElement.classList.add("dark");
-    } else {
-      document.documentElement.classList.remove("dark");
-    }
-  }, [isDarkMode]);
+    requestAnimationFrame(step);
+  }, [deckA.track, deckB.track, aiMixing, resumeAudioContext, crossfader, deckA.isPlaying, deckB.isPlaying, togglePlay, stopDeck]);
 
-  // ============================================================================
-  // RENDER
-  // ============================================================================
+  // ========================================================================
+  // UI
+  // ========================================================================
 
+  const anyPlaying = deckA.isPlaying || deckB.isPlaying;
+
+  // ✅ Fullscreen layout:
+  // - w-screen + min-h-screen
+  // - remove max-w container clamp
+  // - let grid/cards stretch vertically
   return (
-    <div className={`min-h-screen transition-colors duration-300 ${isDarkMode ? "bg-black" : "bg-gray-50"}`}>
-      {/* Animated Background */}
+    <div className={`min-h-screen w-screen transition-colors duration-300 ${isDarkMode ? "bg-black" : "bg-gray-50"}`}>
+      {/* Background */}
       <div className="fixed inset-0 pointer-events-none overflow-hidden">
         <div
           className={`absolute inset-0 ${
-            isDarkMode
-              ? "bg-gradient-to-br from-purple-900/10 via-black to-blue-900/10"
-              : "bg-gradient-to-br from-purple-50 via-white to-blue-50"
+            isDarkMode ? "bg-gradient-to-br from-purple-900/15 via-black to-blue-900/15" : "bg-gradient-to-br from-purple-50 via-white to-blue-50"
           }`}
-        >
-          {isDarkMode && (
-            <>
-              <div className="absolute top-1/4 left-1/4 w-64 h-64 bg-purple-500/5 rounded-full blur-3xl animate-pulse" />
-              <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-blue-500/5 rounded-full blur-3xl animate-pulse delay-1000" />
-              <div className="absolute top-1/2 right-1/3 w-48 h-48 bg-pink-500/5 rounded-full blur-2xl animate-pulse delay-500" />
-            </>
-          )}
-        </div>
+        />
+        <div className="absolute -top-40 left-1/2 h-[720px] w-[720px] -translate-x-1/2 rounded-full bg-gradient-to-r from-purple-600/10 to-blue-600/10 blur-3xl" />
       </div>
 
-      {/* Main Content */}
-      <div className="relative z-10 p-4 md:p-6 space-y-4">
+      {/* ✅ Full width wrapper */}
+      <div className="relative z-10 px-4 md:px-8 py-4 md:py-6 space-y-4 w-full">
         {/* Header */}
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div className="flex items-center gap-4">
             <div className={`p-3 rounded-2xl ${isDarkMode ? "bg-purple-500/10" : "bg-purple-500/20"}`}>
-              <Disc3 className={`w-8 h-8 ${isDarkMode ? "text-purple-400" : "text-purple-600"} animate-spin-slow`} />
+              <Disc3 className={`w-8 h-8 ${isDarkMode ? "text-purple-300" : "text-purple-700"} animate-spin-slow`} />
             </div>
             <div>
               <h1 className={`text-2xl md:text-3xl font-bold ${isDarkMode ? "text-white" : "text-gray-900"}`}>
                 SoundFlow AI DJ
               </h1>
               <p className={`text-sm ${isDarkMode ? "text-gray-400" : "text-gray-600"}`}>
-                Professional Live Mixing & AI Generation
+                Performance mixer + infinite procedural studio
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
-            {/* Theme Toggle */}
-            <Button
-              variant="outline"
-              size="icon"
-              className={`rounded-2xl ${isDarkMode ? "border-gray-700" : "border-gray-300"}`}
-              onClick={() => setIsDarkMode(!isDarkMode)}
-            >
+          <div className="flex flex-wrap items-center gap-2 justify-between md:justify-end">
+            <div className="flex items-center gap-2">
+              <Badge
+                variant="secondary"
+                className={`px-3 py-1 ${
+                  isDarkMode ? "bg-green-500/10 text-green-400 border border-green-500/20" : "bg-green-50 text-green-700 border border-green-200"
+                }`}
+              >
+                <Activity className="w-3 h-3 mr-2 animate-pulse" />
+                ONLINE
+              </Badge>
+
+              <Badge
+                variant="secondary"
+                className={`${isDarkMode ? "bg-white/5 text-white/85" : "bg-black/5 text-black/70"} border border-white/10`}
+              >
+                <Gauge className="w-3 h-3 mr-2" />
+                MASTER {Math.round(masterMeter)}%
+              </Badge>
+            </div>
+
+            <Button variant="outline" size="icon" onClick={() => setIsDarkMode((v) => !v)} className="rounded-2xl">
               {isDarkMode ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
             </Button>
-
-            {/* Settings */}
-            <Dialog open={showSettings} onOpenChange={setShowSettings}>
-              <DialogTrigger asChild>
-                <Button
-                  variant="outline"
-                  size="icon"
-                  className={`rounded-2xl ${isDarkMode ? "border-gray-700" : "border-gray-300"}`}
-                >
-                  <Settings className="w-5 h-5" />
-                </Button>
-              </DialogTrigger>
-              <DialogContent className={`${isDarkMode ? "bg-gray-900 text-white" : "bg-white"} rounded-3xl`}>
-                <DialogHeader>
-                  <DialogTitle>Settings</DialogTitle>
-                </DialogHeader>
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between">
-                    <span>Auto-generate next track</span>
-                    <Switch checked={autoGenerate} onCheckedChange={setAutoGenerate} />
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span>AI Auto-mixing</span>
-                    <Switch checked={aiMixing} onCheckedChange={setAiMixing} />
-                  </div>
-                </div>
-              </DialogContent>
-            </Dialog>
-
-            {/* Status Badge */}
-            <Badge
-              variant="secondary"
-              className={`rounded-full px-4 py-2 ${
-                isDarkMode ? "bg-green-500/10 text-green-400" : "bg-green-500/20 text-green-700"
-              }`}
-            >
-              <Activity className="w-4 h-4 mr-2 animate-pulse" />
-              LIVE
-            </Badge>
           </div>
         </div>
 
-        {/* Main Interface */}
-        <Tabs value={activeView} onValueChange={(v: any) => setActiveView(v)} className="w-full">
+        {/* Workspace Tabs */}
+        <Tabs value={activeView} onValueChange={(v) => setActiveView(v as any)} className="w-full">
           <TabsList
-            className={`grid w-full max-w-md grid-cols-3 ${
-              isDarkMode ? "bg-gray-900/50" : "bg-white"
-            } rounded-2xl p-1`}
+            className={`grid w-full max-w-lg grid-cols-3 mx-auto mb-4 rounded-2xl p-1 border ${
+              isDarkMode ? "bg-gray-900/60 border-white/10" : "bg-white border-black/10"
+            }`}
           >
-            <TabsTrigger value="mixer" className="rounded-xl">
-              <Sliders className="w-4 h-4 mr-2" />
-              Mixer
-            </TabsTrigger>
-            <TabsTrigger value="generator" className="rounded-xl">
-              <Sparkles className="w-4 h-4 mr-2" />
-              Generator
-            </TabsTrigger>
-            <TabsTrigger value="library" className="rounded-xl">
-              <Music className="w-4 h-4 mr-2" />
-              Library
-            </TabsTrigger>
+            {[
+              { value: "mixer", label: "Mixer" },
+              { value: "generator", label: "Studio" },
+              { value: "library", label: "Library" },
+            ].map((t) => (
+              <TabsTrigger
+                key={t.value}
+                value={t.value}
+                className={[
+                  "rounded-xl transition-colors",
+                  isDarkMode ? "text-white/75 hover:text-white" : "text-black/70 hover:text-black",
+                  "data-[state=active]:text-white data-[state=active]:bg-white/10 data-[state=active]:shadow-sm",
+                  !isDarkMode && "data-[state=active]:text-black data-[state=active]:bg-black/5",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
+              >
+                {t.label}
+              </TabsTrigger>
+            ))}
           </TabsList>
 
-          {/* ===== MIXER VIEW ===== */}
-          <TabsContent value="mixer" className="mt-4 space-y-4">
-            <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
-              {/* Deck A */}
-              <DeckInterface
-                deck="A"
-                state={deckA}
-                onTogglePlay={() => togglePlay("A")}
-                onVolumeChange={(v) => setDeckVolume("A", v)}
-                onEQChange={(eq) => setDeckA((prev) => ({ ...prev, eq }))}
-                vuMeter={vuMeterA}
-                isDarkMode={isDarkMode}
-              />
+          {/* MIXER */}
+          <TabsContent value="mixer" className="mt-0">
+            {/* ✅ Make mixer fill the viewport height minus header/tabs area */}
+            <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 min-h-[calc(100vh-170px)]">
+              {/* DECK A */}
+              <div className="xl:col-span-4 h-full">
+                <DeckInterface
+                  deck="A"
+                  state={deckA}
+                  isDarkMode={isDarkMode}
+                  vuMeter={vuMeterA}
+                  onTogglePlay={() => togglePlay("A")}
+                  onStop={() => stopDeck("A")}
+                  onSeek={(v) => handleSeek("A", v)}
+                  onVolumeChange={(v) => setDeckA((p) => ({ ...p, volume: v }))}
+                  onTempoChange={(v) => setTempo("A", v)}
+                  onCueSet={() => setCue("A")}
+                  onCueJump={() => jumpToCue("A")}
+                  onLoopToggle={() => toggleLoop("A")}
+                />
+              </div>
 
-              {/* Center Mixer */}
-              <Card
-                className={`rounded-3xl ${
-                  isDarkMode ? "bg-gray-900/50 border-gray-800" : "bg-white border-gray-200"
-                } backdrop-blur-xl`}
-              >
-                <CardContent className="p-6 space-y-6">
-                  {/* Master VU Meter */}
-                  <div className="space-y-2">
+              {/* MIXER CENTER */}
+              <div className="xl:col-span-4 flex flex-col gap-6 h-full">
+                <Card
+                  className={`h-full rounded-3xl ${
+                    isDarkMode ? "bg-gray-950/70 border-gray-800" : "bg-white border-gray-200"
+                  } backdrop-blur-xl shadow-2xl overflow-hidden`}
+                >
+                  <CardContent className="p-6 md:p-8 space-y-6 h-full flex flex-col">
+                    {/* Mixer Header */}
                     <div className="flex items-center justify-between">
-                      <span className={`text-sm font-medium ${isDarkMode ? "text-gray-400" : "text-gray-600"}`}>
-                        MASTER
-                      </span>
-                      <Badge variant="secondary" className="rounded-full">
-                        {masterVolume}
-                      </Badge>
-                    </div>
-                    <div className="flex gap-1 h-32">
-                      {Array.from({ length: 20 }).map((_, i) => {
-                        const threshold = (i / 20) * 100;
-                        const isActive = Math.max(vuMeterA, vuMeterB) > threshold;
-                        return (
-                          <div
-                            key={i}
-                            className={`flex-1 rounded-full transition-colors ${
-                              isActive
-                                ? i > 16
-                                  ? "bg-red-500"
-                                  : i > 12
-                                  ? "bg-yellow-500"
-                                  : "bg-green-500"
-                                : isDarkMode
-                                ? "bg-gray-800"
-                                : "bg-gray-200"
-                            }`}
-                          />
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  {/* Crossfader */}
-                  <div className="space-y-4">
-                    <div className="flex items-center justify-between">
-                      <Badge variant="secondary" className="rounded-full">
-                        A
-                      </Badge>
-                      <span className={`text-xs ${isDarkMode ? "text-gray-500" : "text-gray-400"}`}>
-                        CROSSFADER
-                      </span>
-                      <Badge variant="secondary" className="rounded-full">
-                        B
-                      </Badge>
-                    </div>
-                    <div className="relative">
-                      <Slider
-                        value={[crossfader]}
-                        onValueChange={([v]) => setCrossfader(v)}
-                        min={0}
-                        max={100}
-                        step={1}
-                        className="py-4"
-                      />
-                      <div
-                        className={`absolute top-0 left-1/2 transform -translate-x-1/2 w-1 h-full ${
-                          isDarkMode ? "bg-gray-700" : "bg-gray-300"
-                        } rounded-full`}
-                      />
-                    </div>
-                  </div>
-
-                  {/* Master Volume */}
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className={`text-sm font-medium ${isDarkMode ? "text-gray-400" : "text-gray-600"}`}>
-                        Volume
-                      </span>
-                      <Badge variant="secondary" className="rounded-full">
-                        {masterVolume}%
-                      </Badge>
-                    </div>
-                    <Slider
-                      value={[masterVolume]}
-                      onValueChange={([v]) => setMasterVolume(v)}
-                      min={0}
-                      max={100}
-                      step={1}
-                    />
-                  </div>
-
-                  {/* Master EQ */}
-                  <div className="space-y-3">
-                    <span className={`text-sm font-medium ${isDarkMode ? "text-gray-400" : "text-gray-600"}`}>
-                      Master EQ
-                    </span>
-                    <div className="grid grid-cols-3 gap-3">
-                      <div className="space-y-2">
-                        <span className="text-xs">LOW</span>
-                        <Slider
-                          value={[masterEQ.low]}
-                          onValueChange={([v]) => setMasterEQ((prev) => ({ ...prev, low: v }))}
-                          min={0}
-                          max={100}
-                          orientation="vertical"
-                          className="h-24"
-                        />
+                      <div className="flex items-center gap-2">
+                        <div className={`h-10 w-10 rounded-2xl flex items-center justify-center ${isDarkMode ? "bg-white/5" : "bg-black/5"}`}>
+                          <Merge className={`${isDarkMode ? "text-white/85" : "text-black/70"} w-5 h-5`} />
+                        </div>
+                        <div>
+                          <div className={`font-bold ${isDarkMode ? "text-white" : "text-gray-900"}`}>Mixer</div>
+                          <div className={`text-xs ${isDarkMode ? "text-white/55" : "text-black/45"}`}>
+                            Equal-power crossfade • WebAudio meters
+                          </div>
+                        </div>
                       </div>
-                      <div className="space-y-2">
-                        <span className="text-xs">MID</span>
-                        <Slider
-                          value={[masterEQ.mid]}
-                          onValueChange={([v]) => setMasterEQ((prev) => ({ ...prev, mid: v }))}
-                          min={0}
-                          max={100}
-                          orientation="vertical"
-                          className="h-24"
-                        />
+
+                      <Button
+                        variant={isDarkMode ? "secondary" : "outline"}
+                        size="sm"
+                        className="rounded-2xl"
+                        onClick={syncTempo}
+                        disabled={!deckA.track || !deckB.track}
+                      >
+                        <Wand2 className="w-4 h-4 mr-2" />
+                        SYNC TEMPO
+                      </Button>
+                    </div>
+
+                    {/* ✅ Realistic spectrum (true analyser bands) */}
+                    <SpectrumReal isDarkMode={isDarkMode} bands={masterBands} isActive={anyPlaying} />
+
+                    {/* Crossfader */}
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between text-xs font-bold tracking-widest">
+                        <span className="text-blue-400">DECK A</span>
+                        <span className={`${isDarkMode ? "text-white/60" : "text-black/50"}`}>CROSSFADER</span>
+                        <span className="text-purple-400">DECK B</span>
                       </div>
-                      <div className="space-y-2">
-                        <span className="text-xs">HIGH</span>
-                        <Slider
-                          value={[masterEQ.high]}
-                          onValueChange={([v]) => setMasterEQ((prev) => ({ ...prev, high: v }))}
-                          min={0}
-                          max={100}
-                          orientation="vertical"
-                          className="h-24"
-                        />
+                      <div className="relative">
+                        <div className="pointer-events-none absolute inset-y-0 left-1/2 w-px bg-white/25" />
+                        <Slider value={[crossfader]} onValueChange={([v]) => setCrossfader(v)} min={0} max={100} step={1} className="py-4" />
+                        <div className={`text-[11px] mt-1 ${isDarkMode ? "text-white/55" : "text-black/45"}`}>
+                          {crossfader < 45 ? "Focus: Deck A" : crossfader > 55 ? "Focus: Deck B" : "Centered"}
+                        </div>
                       </div>
                     </div>
-                  </div>
 
-                  {/* AI Mixing */}
-                  <Button
-                    className={`w-full rounded-2xl ${
-                      isDarkMode
-                        ? "bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700"
-                        : "bg-gradient-to-r from-purple-500 to-blue-500 hover:from-purple-600 hover:to-blue-600"
-                    }`}
-                    onClick={performAIMix}
-                    disabled={!deckA.track || !deckB.track || aiMixing}
-                  >
-                    {aiMixing ? (
-                      <>
-                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                        AI Mixing...
-                      </>
-                    ) : (
-                      <>
-                        <Zap className="w-4 h-4 mr-2" />
-                        AI Auto-Mix
-                      </>
-                    )}
-                  </Button>
-                </CardContent>
-              </Card>
+                    {/* Master */}
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between text-xs font-bold tracking-widest">
+                        <span className={`${isDarkMode ? "text-white/70" : "text-black/60"}`}>MASTER OUT</span>
+                        <span className={`${isDarkMode ? "text-white/70" : "text-black/60"}`}>{masterVolume}%</span>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <Volume2 className={`${isDarkMode ? "text-white/70" : "text-black/60"} w-4 h-4`} />
+                        <Slider value={[masterVolume]} onValueChange={([v]) => setMasterVolume(v)} min={0} max={100} step={1} />
+                      </div>
+                      <MeterBar value={masterMeter} isDarkMode={isDarkMode} label="MASTER" />
+                    </div>
 
-              {/* Deck B */}
-              <DeckInterface
-                deck="B"
-                state={deckB}
-                onTogglePlay={() => togglePlay("B")}
-                onVolumeChange={(v) => setDeckVolume("B", v)}
-                onEQChange={(eq) => setDeckB((prev) => ({ ...prev, eq }))}
-                vuMeter={vuMeterB}
-                isDarkMode={isDarkMode}
-              />
+                    {/* Push bottom controls to bottom */}
+                    <div className="mt-auto space-y-3">
+                      <div className="grid grid-cols-2 gap-3">
+                        <Button
+                          className={`h-12 rounded-2xl font-bold ${
+                            isDarkMode ? "bg-white/5 hover:bg-white/10 text-white border border-white/10" : "bg-black/5 hover:bg-black/10 text-black border border-black/10"
+                          }`}
+                          onClick={() => setAutoGenerate((v) => !v)}
+                          variant="ghost"
+                        >
+                          <Repeat className="w-4 h-4 mr-2" />
+                          Auto-gen: {autoGenerate ? "ON" : "OFF"}
+                        </Button>
+
+                        <Button
+                          className={`h-12 rounded-2xl font-bold ${
+                            isDarkMode ? "bg-gradient-to-r from-purple-600 to-blue-600" : "bg-black text-white"
+                          }`}
+                          onClick={performAIMix}
+                          disabled={aiMixing || !deckA.track || !deckB.track}
+                        >
+                          {aiMixing ? <Loader2 className="w-5 h-5 mr-2 animate-spin" /> : <Zap className="w-5 h-5 mr-2" />}
+                          {aiMixing ? "MIXING..." : "AUTO MIX"}
+                        </Button>
+                      </div>
+
+                      <div className={`text-xs ${isDarkMode ? "text-white/55" : "text-black/45"}`}>
+                        Tip: Load tracks on both decks, hit <span className="font-semibold">SYNC TEMPO</span>, then <span className="font-semibold">AUTO MIX</span>.
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+
+              {/* DECK B */}
+              <div className="xl:col-span-4 h-full">
+                <DeckInterface
+                  deck="B"
+                  state={deckB}
+                  isDarkMode={isDarkMode}
+                  vuMeter={vuMeterB}
+                  onTogglePlay={() => togglePlay("B")}
+                  onStop={() => stopDeck("B")}
+                  onSeek={(v) => handleSeek("B", v)}
+                  onVolumeChange={(v) => setDeckB((p) => ({ ...p, volume: v }))}
+                  onTempoChange={(v) => setTempo("B", v)}
+                  onCueSet={() => setCue("B")}
+                  onCueJump={() => jumpToCue("B")}
+                  onLoopToggle={() => toggleLoop("B")}
+                />
+              </div>
             </div>
           </TabsContent>
 
-          {/* ===== GENERATOR VIEW ===== */}
-          <TabsContent value="generator" className="mt-4">
-            <GeneratorInterface onGenerate={generateTrack} isGenerating={isGenerating} isDarkMode={isDarkMode} />
+          {/* STUDIO */}
+          <TabsContent value="generator">
+            <div className="min-h-[calc(100vh-170px)]">
+              <Studio onTrackGenerated={handleTrackGenerated} isDarkMode={isDarkMode} />
+            </div>
           </TabsContent>
 
-          {/* ===== LIBRARY VIEW ===== */}
-          <TabsContent value="library" className="mt-4">
-            <LibraryInterface tracks={generatedTracks} onLoadTrack={loadTrackToDeck} isDarkMode={isDarkMode} />
+          {/* LIBRARY */}
+          <TabsContent value="library">
+            <div className="min-h-[calc(100vh-170px)]">
+              <LibraryInterface tracks={generatedTracks} onLoadTrack={loadTrackToDeck} isDarkMode={isDarkMode} />
+            </div>
           </TabsContent>
         </Tabs>
       </div>
@@ -744,667 +843,422 @@ export default function DJDashboard() {
 }
 
 // ============================================================================
-// DECK INTERFACE COMPONENT
+// ✅ REALISTIC SPECTRUM (uses analyser bands, no fake motion when idle)
 // ============================================================================
 
-interface DeckInterfaceProps {
+function SpectrumReal({
+  isDarkMode,
+  bands,
+  isActive,
+}: {
+  isDarkMode: boolean;
+  bands: number[]; // 0..100, length 36
+  isActive: boolean;
+}) {
+  const safeBands = bands?.length ? bands : Array(BAND_COUNT).fill(0);
+  const peak = Math.max(...safeBands);
+
+  if (!isActive || peak < 2) {
+    return (
+      <div
+        className={`h-28 rounded-2xl border overflow-hidden relative flex items-center justify-center ${
+          isDarkMode ? "bg-black/40 border-white/10" : "bg-gray-100 border-black/10"
+        }`}
+      >
+        <div className={`text-xs ${isDarkMode ? "text-white/55" : "text-black/45"}`}>
+          No audio — load a track and press Play
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className={`h-28 rounded-2xl border overflow-hidden relative ${
+        isDarkMode ? "bg-black/40 border-white/10" : "bg-gray-100 border-black/10"
+      }`}
+    >
+      <div className="absolute inset-0 bg-gradient-to-t from-black/50 to-transparent pointer-events-none" />
+      <div className="h-full p-4 flex items-end gap-1">
+        {safeBands.map((v, i) => {
+          const h = Math.max(4, Math.min(100, v));
+          return (
+            <div
+              key={i}
+              className="flex-1 rounded-t-sm opacity-95"
+              style={{
+                height: `${h}%`,
+                background: "linear-gradient(to top, rgba(147,51,234,0.95), rgba(59,130,246,0.85))",
+              }}
+            />
+          );
+        })}
+      </div>
+
+      <div className={`absolute bottom-2 right-3 text-[11px] ${isDarkMode ? "text-white/45" : "text-black/45"}`}>
+        Spectrum (live)
+      </div>
+    </div>
+  );
+}
+
+// ============================================================================
+// COMPONENT: DECK UI
+// ============================================================================
+
+interface DeckProps {
   deck: "A" | "B";
   state: DeckState;
-  onTogglePlay: () => void;
-  onVolumeChange: (volume: number) => void;
-  onEQChange: (eq: { low: number; mid: number; high: number }) => void;
-  vuMeter: number;
   isDarkMode: boolean;
+  vuMeter: number;
+  onTogglePlay: () => void;
+  onStop: () => void;
+  onSeek: (val: number) => void;
+  onVolumeChange: (val: number) => void;
+  onTempoChange: (val: number) => void;
+  onCueSet: () => void;
+  onCueJump: () => void;
+  onLoopToggle: () => void;
 }
 
 function DeckInterface({
   deck,
   state,
-  onTogglePlay,
-  onVolumeChange,
-  onEQChange,
-  vuMeter,
   isDarkMode,
-}: DeckInterfaceProps) {
+  vuMeter,
+  onTogglePlay,
+  onStop,
+  onSeek,
+  onVolumeChange,
+  onTempoChange,
+  onCueSet,
+  onCueJump,
+  onLoopToggle,
+}: DeckProps) {
+  const isA = deck === "A";
+  const accentText = isA ? "text-blue-300" : "text-purple-300";
+  const accentBorder = isA ? "border-blue-500/30" : "border-purple-500/30";
+  const accentBg = isA ? "bg-blue-500/10" : "bg-purple-500/10";
+  const playedBar = isA ? "bg-blue-500" : "bg-purple-500";
+
+  const seed = useMemo(() => seedFromString(state.track?.id ?? `${deck}-empty`), [state.track?.id, deck]);
+  const waveformBars = useMemo(() => {
+    const rand = mulberry32(seed);
+    return Array.from({ length: 84 }).map(() => 18 + rand() * 72);
+  }, [seed]);
+
+  const progressPercent = state.duration > 0 ? (state.currentTime / state.duration) * 100 : 0;
+  const remaining = Math.max(0, (state.duration || 0) - (state.currentTime || 0));
+
+  const deckReady = !!state.track;
+
   return (
     <Card
-      className={`rounded-3xl ${
-        isDarkMode ? "bg-gray-900/50 border-gray-800" : "bg-white border-gray-200"
-      } backdrop-blur-xl`}
+      className={`h-full rounded-3xl overflow-hidden border ${
+        isDarkMode ? "bg-gray-950/70 border-gray-800" : "bg-white border-gray-200"
+      } backdrop-blur-xl shadow-2xl`}
     >
-      <CardContent className="p-6 space-y-4">
+      <CardContent className="p-6 flex flex-col h-full gap-5">
         {/* Header */}
-        <div className="flex items-center justify-between">
-          <Badge
-            variant="secondary"
-            className={`rounded-full text-lg px-4 py-2 ${
-              deck === "A"
-                ? isDarkMode
-                  ? "bg-blue-500/20 text-blue-400"
-                  : "bg-blue-500/30 text-blue-700"
-                : isDarkMode
-                ? "bg-purple-500/20 text-purple-400"
-                : "bg-purple-500/30 text-purple-700"
-            }`}
-          >
-            DECK {deck}
-          </Badge>
-          <div className="flex gap-2">
-            <Button variant="ghost" size="icon" className="rounded-xl">
-              <Headphones className="w-4 h-4" />
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className={`h-11 w-11 rounded-2xl flex items-center justify-center ${accentBg} border ${accentBorder}`}>
+              <Disc3 className={`${accentText} w-5 h-5`} />
+            </div>
+            <div>
+              <div className={`text-xs font-bold tracking-widest ${isDarkMode ? "text-white/65" : "text-black/45"}`}>
+                DECK {deck}
+              </div>
+              <div className={`font-bold ${isDarkMode ? "text-white" : "text-gray-900"} leading-tight`}>
+                {state.track?.name ?? "Empty deck"}
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <Button size="icon" variant="ghost" className="rounded-2xl" title="Cue in headphones">
+              <Headphones className="w-5 h-5 opacity-70" />
             </Button>
-            <Button variant="ghost" size="icon" className="rounded-xl">
-              <Repeat className="w-4 h-4" />
+            <Button size="icon" variant="ghost" className="rounded-2xl" title="Deck settings">
+              <Settings className="w-5 h-5 opacity-70" />
             </Button>
           </div>
         </div>
 
-        {/* Track Info */}
-        {state.track ? (
-          <div className={`p-4 rounded-2xl ${isDarkMode ? "bg-gray-800/50" : "bg-gray-100"}`}>
-            <div className="flex items-start justify-between gap-3">
-              <div className="flex-1 min-w-0">
-                <h3 className={`font-semibold truncate ${isDarkMode ? "text-white" : "text-gray-900"}`}>
-                  {state.track.name}
-                </h3>
-                <div className="flex items-center gap-2 mt-1 flex-wrap">
-                  <Badge variant="secondary" className="rounded-full text-xs">
-                    {state.track.bpm} BPM
-                  </Badge>
-                  <Badge variant="secondary" className="rounded-full text-xs">
-                    {state.track.key}
-                  </Badge>
-                  <Badge variant="secondary" className="rounded-full text-xs">
-                    {state.track.genre}
-                  </Badge>
-                </div>
-              </div>
-              <div
-                className={`w-16 h-16 rounded-xl ${
-                  isDarkMode ? "bg-gray-700" : "bg-gray-200"
-                } flex items-center justify-center`}
-              >
-                <Activity className="w-8 h-8" />
+        {/* Track Meta */}
+        <div className={`rounded-2xl border p-4 ${isDarkMode ? "bg-black/45 border-white/10" : "bg-gray-50 border-black/10"}`}>
+          {state.track ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant="secondary" className={`border ${accentBorder} ${isDarkMode ? "bg-white/10 text-white" : "bg-black/5"}`}>
+                {state.track.bpm} BPM
+              </Badge>
+              <Badge variant="secondary" className={`${isDarkMode ? "bg-white/10 text-white" : "bg-black/5"}`}>
+                {state.track.key}
+              </Badge>
+              <Badge variant="secondary" className={`${isDarkMode ? "bg-white/10 text-white" : "bg-black/5"}`}>
+                {state.track.genre}
+              </Badge>
+
+              <div className="ml-auto flex items-center gap-2">
+                <MeterBar value={vuMeter} isDarkMode={isDarkMode} label="VU" compact />
               </div>
             </div>
+          ) : (
+            <div className={`flex items-center justify-between ${isDarkMode ? "text-white/60" : "text-black/45"}`}>
+              <div className="flex items-center gap-2">
+                <Music className="w-4 h-4" />
+                <span className="text-sm">Load a track from Studio or Library</span>
+              </div>
+              <Badge variant="outline" className={`${isDarkMode ? "border-white/15 text-white/80" : "border-black/10"}`}>
+                READY
+              </Badge>
+            </div>
+          )}
+        </div>
+
+        {/* Waveform (hide “fake” waveform if empty deck) */}
+        {!deckReady ? (
+          <div className={`h-24 rounded-2xl border flex items-center justify-center ${isDarkMode ? "bg-black/35 border-white/10" : "bg-gray-100 border-black/10"}`}>
+            <div className={`text-xs ${isDarkMode ? "text-white/55" : "text-black/45"}`}>Waveform appears when a track is loaded</div>
           </div>
         ) : (
-          <div
-            className={`p-8 rounded-2xl border-2 border-dashed ${
-              isDarkMode ? "border-gray-700" : "border-gray-300"
-            } text-center`}
-          >
-            <Music className={`w-12 h-12 mx-auto mb-2 ${isDarkMode ? "text-gray-600" : "text-gray-400"}`} />
-            <p className={`text-sm ${isDarkMode ? "text-gray-500" : "text-gray-600"}`}>No track loaded</p>
-          </div>
-        )}
-
-        {/* Waveform Display */}
-        <div className="relative h-24 rounded-2xl overflow-hidden bg-gradient-to-r from-blue-500/10 to-purple-500/10">
-          <div className="absolute inset-0 flex items-center justify-center">
-            {state.isPlaying ? (
-              <div className="flex items-end gap-1 h-full p-2">
-                {Array.from({ length: 50 }).map((_, i) => (
-                  <div
-                    key={i}
-                    className={`flex-1 ${deck === "A" ? "bg-blue-500" : "bg-purple-500"} rounded-full animate-pulse`}
-                    style={{
-                      height: `${Math.random() * 80 + 20}%`,
-                      animationDelay: `${i * 50}ms`,
-                    }}
-                  />
-                ))}
-              </div>
-            ) : (
-              <div className="flex items-end gap-1 h-full p-2">
-                {Array.from({ length: 50 }).map((_, i) => (
-                  <div
-                    key={i}
-                    className={`flex-1 ${isDarkMode ? "bg-gray-700" : "bg-gray-300"} rounded-full`}
-                    style={{ height: "30%" }}
-                  />
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Transport Controls */}
-        <div className="flex items-center justify-center gap-3">
-          <Button size="icon" variant="outline" className="rounded-2xl" onClick={onTogglePlay} disabled={!state.track}>
-            {state.isPlaying ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5" />}
-          </Button>
-          <Button size="icon" variant="outline" className="rounded-2xl" disabled={!state.track}>
-            <SkipForward className="w-5 h-5" />
-          </Button>
-        </div>
-
-        {/* Volume */}
-        <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <span className={`text-sm ${isDarkMode ? "text-gray-400" : "text-gray-600"}`}>Volume</span>
-            <Badge variant="secondary" className="rounded-full">
-              {state.volume}%
-            </Badge>
-          </div>
-          <Slider value={[state.volume]} onValueChange={([v]) => onVolumeChange(v)} min={0} max={100} step={1} />
-        </div>
-
-        {/* EQ */}
-        <div className="space-y-3">
-          <span className={`text-sm font-medium ${isDarkMode ? "text-gray-400" : "text-gray-600"}`}>EQ</span>
-          <div className="grid grid-cols-3 gap-3">
-            <div className="space-y-2">
-              <span className="text-xs">LOW</span>
-              <Slider
-                value={[state.eq.low]}
-                onValueChange={([v]) => onEQChange({ ...state.eq, low: v })}
-                min={0}
-                max={100}
-                orientation="vertical"
-                className="h-20"
-              />
-            </div>
-            <div className="space-y-2">
-              <span className="text-xs">MID</span>
-              <Slider
-                value={[state.eq.mid]}
-                onValueChange={([v]) => onEQChange({ ...state.eq, mid: v })}
-                min={0}
-                max={100}
-                orientation="vertical"
-                className="h-20"
-              />
-            </div>
-            <div className="space-y-2">
-              <span className="text-xs">HIGH</span>
-              <Slider
-                value={[state.eq.high]}
-                onValueChange={([v]) => onEQChange({ ...state.eq, high: v })}
-                min={0}
-                max={100}
-                orientation="vertical"
-                className="h-20"
-              />
-            </div>
-          </div>
-        </div>
-
-        {/* VU Meter */}
-        <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <span className={`text-xs ${isDarkMode ? "text-gray-500" : "text-gray-400"}`}>LEVEL</span>
-            <Badge variant="secondary" className="rounded-full text-xs">
-              {Math.round(vuMeter)}
-            </Badge>
-          </div>
-          <Progress value={vuMeter} className="h-2" />
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-// ============================================================================
-// GENERATOR INTERFACE - WITH FOCUS ENGINE & SMART MIXER
-// ============================================================================
-
-interface GeneratorInterfaceProps {
-  onGenerate: (request: GenerationRequest) => Promise<Track>;
-  isGenerating: boolean;
-  isDarkMode: boolean;
-}
-
-function GeneratorInterface({ onGenerate, isGenerating, isDarkMode }: GeneratorInterfaceProps) {
-  // Core Generation
-  const [genre, setGenre] = useState("Trance");
-  const [bpm, setBpm] = useState(128);
-  const [key, setKey] = useState("A");
-  const [duration, setDuration] = useState(180);
-
-  // Focus Engine
-  const [binauralMode, setBinauralMode] = useState<"off" | "focus" | "relax">("off");
-  const [ambience, setAmbience] = useState({ rain: 0, vinyl: 0, white: 0 });
-
-  // Smart Mixer / Energy
-  const [intensity, setIntensity] = useState(50);
-  const [synthParams, setSynthParams] = useState({
-    cutoff: 75,
-    resonance: 30,
-    drive: 10,
-    space: 20,
-  });
-  const [energyCurve, setEnergyCurve] = useState<"linear" | "drop" | "peak">("peak");
-
-  const handleIntensityChange = ([val]: number[]) => {
-    setIntensity(val);
-    setSynthParams({
-      cutoff: Math.min(100, val * 1.2),
-      resonance: val * 0.6,
-      drive: val > 80 ? (val - 80) * 3 : 0,
-      space: 100 - val,
-    });
-  };
-
-  const handleGenerate = () => {
-    const layers = ["drums", "bass", "music"];
-    if (intensity < 30) layers.pop();
-    if (ambience.rain > 0 || ambience.vinyl > 0) layers.push("texture");
-
-    onGenerate({
-      genre,
-      bpm,
-      key,
-      layers,
-      duration,
-      binaural: binauralMode,
-      ambience,
-      intensity,
-      synthParams,
-      energyCurve,
-    });
-  };
-
-  return (
-    <Card
-      className={`rounded-3xl ${
-        isDarkMode ? "bg-gray-900/50 border-gray-800" : "bg-white border-gray-200"
-      } backdrop-blur-xl`}
-    >
-      <CardContent className="p-6">
-        {/* Header */}
-        <div className="flex items-center justify-between mb-6">
-          <div>
-            <h2 className={`text-xl font-bold ${isDarkMode ? "text-white" : "text-gray-900"}`}>Creation Studio</h2>
-            <p className={`text-sm ${isDarkMode ? "text-gray-400" : "text-gray-600"}`}>
-              AI Sound Design & Focus Engine
-            </p>
-          </div>
-          <Badge
-            variant="secondary"
-            className={`rounded-full ${
-              isGenerating
-                ? isDarkMode
-                  ? "bg-yellow-500/20 text-yellow-400"
-                  : "bg-yellow-500/30 text-yellow-700"
-                : isDarkMode
-                ? "bg-green-500/20 text-green-400"
-                : "bg-green-500/30 text-green-700"
-            }`}
-          >
-            {isGenerating ? (
-              <>
-                <Loader2 className="w-3 h-3 mr-2 animate-spin" />
-                Processing AI
-              </>
-            ) : (
-              <>
-                <Sparkles className="w-3 h-3 mr-2" />
-                Ready
-              </>
-            )}
-          </Badge>
-        </div>
-
-        {/* TABS: Smart Mixer Split */}
-        <Tabs defaultValue="vibe" className="w-full">
-          <TabsList className="grid w-full grid-cols-2 mb-6">
-            <TabsTrigger value="vibe">Panel A: Vibe & Focus</TabsTrigger>
-            <TabsTrigger value="pro">Panel B: Pro Designer</TabsTrigger>
-          </TabsList>
-
-          {/* === PANEL A: VIBE CONTROLLER === */}
-          <TabsContent value="vibe" className="space-y-6">
-            {/* Focus Engine */}
-            <div
-              className={`p-4 rounded-2xl border ${
-                isDarkMode ? "border-purple-500/20 bg-purple-500/5" : "border-purple-200 bg-purple-50"
-              }`}
-            >
-              <div className="flex items-center gap-2 mb-4">
-                <Brain className="w-5 h-5 text-purple-500" />
-                <h3 className="font-semibold">Focus Engine (Binaural)</h3>
-              </div>
-              <div className="grid grid-cols-3 gap-2">
-                {["off", "focus", "relax"].map((mode) => (
-                  <Button
-                    key={mode}
-                    variant={binauralMode === mode ? "default" : "outline"}
-                    onClick={() => setBinauralMode(mode as any)}
-                    className="capitalize rounded-2xl"
-                  >
-                    {mode === "focus" && <Zap className="w-4 h-4 mr-2" />}
-                    {mode === "relax" && <Waves className="w-4 h-4 mr-2" />}
-                    {mode}
-                  </Button>
-                ))}
-              </div>
-              <p className="text-xs text-center mt-2 opacity-60">🎧 Headphones required for entrainment</p>
+          <div className="select-none">
+            <div className="flex items-center justify-between text-[11px] font-mono font-bold opacity-70 mb-2">
+              <span>{formatTime(state.currentTime)}</span>
+              <span>-{formatTime(remaining)}</span>
             </div>
 
-            {/* Ambience */}
-            <div className="space-y-4">
-              <label className="text-sm font-medium flex items-center gap-2">
-                <CloudRain className="w-4 h-4" /> Background Ambience
-              </label>
-              <div className="space-y-3">
-                <div className="flex items-center gap-4">
-                  <span className="text-xs w-12">Rain</span>
-                  <Slider
-                    value={[ambience.rain]}
-                    max={100}
-                    onValueChange={([v]) => setAmbience({ ...ambience, rain: v })}
-                  />
-                  <Badge variant="secondary" className="text-xs">
-                    {ambience.rain}
-                  </Badge>
-                </div>
-                <div className="flex items-center gap-4">
-                  <span className="text-xs w-12">Vinyl</span>
-                  <Slider
-                    value={[ambience.vinyl]}
-                    max={100}
-                    onValueChange={([v]) => setAmbience({ ...ambience, vinyl: v })}
-                  />
-                  <Badge variant="secondary" className="text-xs">
-                    {ambience.vinyl}
-                  </Badge>
-                </div>
-              </div>
-            </div>
-
-            {/* Intensity Macro */}
-            <div className="space-y-3 pt-4 border-t border-gray-700/50">
-              <div className="flex justify-between">
-                <label className="text-sm font-bold">Session Intensity</label>
-                <span className="text-xs opacity-70">
-                  {intensity < 30 ? "Ambient Flow" : intensity > 70 ? "High Energy" : "Deep Work"}
-                </span>
-              </div>
-              <Slider value={[intensity]} max={100} step={1} onValueChange={handleIntensityChange} className="py-2" />
-              <div className="flex justify-between text-xs opacity-50">
-                <span>Chill</span>
-                <span>Balanced</span>
-                <span>Peak</span>
-              </div>
-            </div>
-          </TabsContent>
-
-          {/* === PANEL B: PRO DESIGNER === */}
-          <TabsContent value="pro" className="space-y-6">
-            {/* Energy Curve */}
-            <div className={`p-4 rounded-2xl ${isDarkMode ? "bg-gray-800" : "bg-gray-100"}`}>
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-sm font-semibold flex items-center gap-2">
-                  <TrendingUp className="w-4 h-4" /> Energy Flow
-                </h3>
-                <div className="flex gap-1">
-                  <Button
-                    size="sm"
-                    variant={energyCurve === "linear" ? "default" : "ghost"}
-                    onClick={() => setEnergyCurve("linear")}
-                    className="rounded-xl"
-                  >
-                    Linear
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant={energyCurve === "drop" ? "default" : "ghost"}
-                    onClick={() => setEnergyCurve("drop")}
-                    className="rounded-xl"
-                  >
-                    Drop
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant={energyCurve === "peak" ? "default" : "ghost"}
-                    onClick={() => setEnergyCurve("peak")}
-                    className="rounded-xl"
-                  >
-                    Peak
-                  </Button>
-                </div>
-              </div>
-              {/* Visual Graph */}
-              <div className="h-16 w-full flex items-end gap-1 px-2">
-                {Array.from({ length: 20 }).map((_, i) => {
-                  let h = 30;
-                  if (energyCurve === "linear") h = 30 + i * 3;
-                  if (energyCurve === "peak") h = 30 + Math.sin(i / 3) * 40;
-                  if (energyCurve === "drop") h = i < 10 ? 80 : 20 + i * 2;
+            <div className="relative">
+              <div className={`flex items-end gap-[2px] h-20 w-full rounded-2xl border overflow-hidden p-3 ${isDarkMode ? "bg-black/40 border-white/10" : "bg-gray-100 border-black/10"}`}>
+                {waveformBars.map((h, i) => {
+                  const barPos = (i / waveformBars.length) * 100;
+                  const played = barPos <= progressPercent;
                   return (
                     <div
                       key={i}
-                      className={`flex-1 rounded-t-sm ${isDarkMode ? "bg-blue-500/50" : "bg-blue-400"}`}
-                      style={{ height: `${Math.max(10, h)}%` }}
+                      className={`flex-1 rounded-full transition-colors duration-100 ${played ? playedBar : isDarkMode ? "bg-white/10" : "bg-black/10"}`}
+                      style={{ height: `${h}%`, opacity: played ? 1 : 0.5 }}
                     />
                   );
                 })}
               </div>
-            </div>
 
-            {/* Synth Controls */}
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <label className="text-xs font-medium flex items-center gap-1">
-                  <AlignLeft className="w-3 h-3" /> Filter Cutoff
-                </label>
-                <Slider
-                  value={[synthParams.cutoff]}
-                  max={100}
-                  onValueChange={([v]) => setSynthParams({ ...synthParams, cutoff: v })}
-                />
-                <Badge variant="secondary" className="text-xs">
-                  {Math.round(synthParams.cutoff)}
-                </Badge>
-              </div>
-              <div className="space-y-2">
-                <label className="text-xs font-medium flex items-center gap-1">
-                  <Wind className="w-3 h-3" /> Resonance
-                </label>
-                <Slider
-                  value={[synthParams.resonance]}
-                  max={100}
-                  onValueChange={([v]) => setSynthParams({ ...synthParams, resonance: v })}
-                />
-                <Badge variant="secondary" className="text-xs">
-                  {Math.round(synthParams.resonance)}
-                </Badge>
-              </div>
-              <div className="space-y-2">
-                <label className="text-xs font-medium flex items-center gap-1">
-                  <Mic2 className="w-3 h-3" /> Drive
-                </label>
-                <Slider
-                  value={[synthParams.drive]}
-                  max={100}
-                  onValueChange={([v]) => setSynthParams({ ...synthParams, drive: v })}
-                />
-                <Badge variant="secondary" className="text-xs">
-                  {Math.round(synthParams.drive)}
-                </Badge>
-              </div>
-              <div className="space-y-2">
-                <label className="text-xs font-medium flex items-center gap-1">
-                  <Gauge className="w-3 h-3" /> Space
-                </label>
-                <Slider
-                  value={[synthParams.space]}
-                  max={100}
-                  onValueChange={([v]) => setSynthParams({ ...synthParams, space: v })}
-                />
-                <Badge variant="secondary" className="text-xs">
-                  {Math.round(synthParams.space)}
-                </Badge>
-              </div>
-            </div>
+              <Slider
+                value={[state.currentTime]}
+                max={state.duration || 1}
+                step={0.05}
+                onValueChange={([val]) => onSeek(val)}
+                className="absolute inset-0 h-20 opacity-0 cursor-pointer"
+                disabled={!deckReady}
+              />
 
-            {/* Base Settings - FIXED: Uses GENRES constant to show ALL styles */}
-            <div className="grid grid-cols-2 gap-4 pt-4 border-t border-gray-700/50">
-              <div>
-                <label className="text-xs text-gray-500">Style</label>
-                <div className="flex flex-wrap gap-2 mt-1">
-                  {/* ✅ THE FIX: Map over the global GENRES constant */}
-                  {GENRES.map((g) => (
-                    <Badge
-                      key={g}
-                      variant={genre === g ? "default" : "outline"}
-                      className="cursor-pointer rounded-xl hover:scale-105 transition-transform"
-                      onClick={() => setGenre(g)}
-                    >
-                      {g}
-                    </Badge>
-                  ))}
+              <div
+                className="absolute top-3 bottom-3 w-[2px] bg-white/80 pointer-events-none shadow-[0_0_12px_rgba(255,255,255,0.7)]"
+                style={{ left: `calc(${progressPercent}% + 12px)` }}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Controls */}
+        <div className="grid grid-cols-12 gap-4 items-center">
+          <div className="col-span-12 md:col-span-5 flex items-center gap-3">
+            <Button
+              size="icon"
+              className={`w-14 h-14 rounded-2xl shadow-2xl transition-transform active:scale-95 ${
+                state.isPlaying
+                  ? isDarkMode
+                    ? "bg-white text-black hover:bg-gray-200"
+                    : "bg-black text-white hover:bg-black/90"
+                  : isDarkMode
+                  ? "bg-white/10 hover:bg-white/15 text-white"
+                  : "bg-black/5 hover:bg-black/10 text-black"
+              }`}
+              onClick={onTogglePlay}
+              disabled={!deckReady}
+              title={state.isPlaying ? "Pause" : "Play"}
+            >
+              {state.isPlaying ? <Pause className="w-7 h-7" /> : <Play className="w-7 h-7 ml-[2px]" />}
+            </Button>
+
+            <div className="flex flex-col gap-2 flex-1">
+              <div className="flex items-center justify-between">
+                <div className={`text-[11px] font-bold tracking-widest ${isDarkMode ? "text-white/65" : "text-black/45"}`}>
+                  VOLUME
+                </div>
+                <div className={`text-[11px] font-mono ${isDarkMode ? "text-white/65" : "text-black/45"}`}>
+                  {Math.round(state.volume)}%
                 </div>
               </div>
-              <div>
-                <label className="text-xs text-gray-500">Speed (BPM)</label>
-                <div className="flex items-center gap-2 mt-1">
-                  <Button
-                    size="icon"
-                    variant="outline"
-                    className="h-6 w-6 rounded-xl"
-                    onClick={() => setBpm((b) => Math.max(60, b - 1))}
-                  >
-                    -
-                  </Button>
-                  <span className="text-sm font-mono w-12 text-center">{bpm}</span>
-                  <Button
-                    size="icon"
-                    variant="outline"
-                    className="h-6 w-6 rounded-xl"
-                    onClick={() => setBpm((b) => Math.min(200, b + 1))}
-                  >
-                    +
-                  </Button>
-                </div>
+              <Slider value={[state.volume]} max={100} onValueChange={([v]) => onVolumeChange(v)} disabled={!deckReady} />
+            </div>
+
+            <Button size="icon" variant="ghost" className="rounded-2xl" onClick={onStop} disabled={!deckReady} title="Stop">
+              <TimerReset className="w-5 h-5 opacity-70" />
+            </Button>
+          </div>
+
+          <div className="col-span-12 md:col-span-4">
+            <div className="flex items-center justify-between">
+              <div className={`text-[11px] font-bold tracking-widest ${isDarkMode ? "text-white/65" : "text-black/45"}`}>
+                TEMPO
+              </div>
+              <div className={`text-[11px] font-mono ${isDarkMode ? "text-white/65" : "text-black/45"}`}>
+                {Math.round(state.tempo)}%
               </div>
             </div>
-          </TabsContent>
-        </Tabs>
+            <Slider value={[state.tempo]} min={50} max={150} step={1} onValueChange={([v]) => onTempoChange(v)} disabled={!deckReady} />
+            <div className={`mt-1 text-[11px] ${isDarkMode ? "text-white/55" : "text-black/45"}`}>
+              Playback rate: {(state.tempo / 100).toFixed(2)}x
+            </div>
+          </div>
 
-        {/* Generate Button */}
-        <Button
-          className={`w-full rounded-2xl h-14 text-lg mt-6 shadow-lg ${
-            isDarkMode
-              ? "bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700"
-              : "bg-gradient-to-r from-purple-500 to-blue-500 hover:from-purple-600 hover:to-blue-600"
-          }`}
-          onClick={handleGenerate}
-          disabled={isGenerating}
-        >
-          {isGenerating ? (
-            <>
-              <Loader2 className="w-5 h-5 mr-2 animate-spin" />
-              Synthesizing...
-            </>
-          ) : (
-            <>
-              <Sparkles className="w-5 h-5 mr-2" />
-              Generate Session
-            </>
-          )}
-        </Button>
+          <div className="col-span-12 md:col-span-3 flex md:flex-col gap-2 md:items-stretch">
+            <Button variant={isDarkMode ? "secondary" : "outline"} className="rounded-2xl w-full" onClick={onCueSet} disabled={!deckReady}>
+              <Badge variant="secondary" className="mr-2 bg-transparent border border-white/15">
+                CUE
+              </Badge>
+              Set
+            </Button>
+            <Button variant={isDarkMode ? "secondary" : "outline"} className="rounded-2xl w-full" onClick={onCueJump} disabled={!deckReady}>
+              Jump
+            </Button>
+
+            <Button
+              variant={state.loop.enabled ? "default" : isDarkMode ? "secondary" : "outline"}
+              className={`rounded-2xl w-full ${state.loop.enabled ? (isDarkMode ? "bg-white text-black hover:bg-gray-200" : "bg-black text-white hover:bg-black/90") : ""}`}
+              onClick={onLoopToggle}
+              disabled={!deckReady}
+            >
+              <Repeat className="w-4 h-4 mr-2" />
+              {state.loop.enabled ? "LOOP ON" : "LOOP"}
+            </Button>
+          </div>
+        </div>
+
+        {/* Status row */}
+        <div className={`grid grid-cols-3 gap-3 text-xs ${isDarkMode ? "text-white/60" : "text-black/45"}`}>
+          <div className={`rounded-2xl border p-3 ${isDarkMode ? "border-white/10 bg-white/5" : "border-black/10 bg-black/5"}`}>
+            <div className="font-bold tracking-widest mb-1">CUE</div>
+            <div className="font-mono">{formatTime(state.cuePoint)}</div>
+          </div>
+
+          <div className={`rounded-2xl border p-3 ${isDarkMode ? "border-white/10 bg-white/5" : "border-black/10 bg-black/5"}`}>
+            <div className="font-bold tracking-widest mb-1">LOOP</div>
+            <div className="font-mono">{state.loop.enabled ? `${formatTime(state.loop.start)} → ${formatTime(state.loop.end)}` : "OFF"}</div>
+          </div>
+
+          <div className={`rounded-2xl border p-3 ${isDarkMode ? "border-white/10 bg-white/5" : "border-black/10 bg-black/5"}`}>
+            <div className="font-bold tracking-widest mb-1">STATE</div>
+            <div className="font-mono">{state.isPlaying ? "PLAYING" : deckReady ? "PAUSED" : "EMPTY"}</div>
+          </div>
+        </div>
       </CardContent>
     </Card>
   );
 }
 
 // ============================================================================
-// LIBRARY INTERFACE COMPONENT
+// Meter bar
 // ============================================================================
 
-interface LibraryInterfaceProps {
-  tracks: Track[];
-  onLoadTrack: (track: Track, deck: "A" | "B") => void;
+function MeterBar({
+  value,
+  isDarkMode,
+  label,
+  compact,
+}: {
+  value: number;
   isDarkMode: boolean;
+  label: string;
+  compact?: boolean;
+}) {
+  const v = clamp(value, 0, 100);
+  const hot = v > 92;
+
+  return (
+    <div className={`flex items-center gap-2 ${compact ? "" : "mt-2"}`}>
+      <div className={`text-[10px] font-bold tracking-widest ${isDarkMode ? "text-white/65" : "text-black/45"}`}>
+        {label}
+      </div>
+      <div
+        className={`h-3 ${compact ? "w-24" : "w-full"} rounded-full overflow-hidden border ${
+          isDarkMode ? "bg-black/30 border-white/12" : "bg-black/5 border-black/10"
+        }`}
+        title={`${Math.round(v)}%`}
+      >
+        <div className={`h-full transition-all duration-100 ${hot ? "bg-red-500" : "bg-green-500"}`} style={{ width: `${v}%` }} />
+      </div>
+    </div>
+  );
 }
+
+// ============================================================================
+// LIBRARY
+// ============================================================================
 
 function LibraryInterface({ tracks, onLoadTrack, isDarkMode }: LibraryInterfaceProps) {
   return (
-    <Card
-      className={`rounded-3xl ${
-        isDarkMode ? "bg-gray-900/50 border-gray-800" : "bg-white border-gray-200"
-      } backdrop-blur-xl`}
-    >
+    <Card className={`rounded-3xl ${isDarkMode ? "bg-gray-950/70 border-gray-800" : "bg-white border-gray-200"} backdrop-blur-xl shadow-2xl`}>
       <CardContent className="p-6">
-        <div className="flex items-center justify-between mb-6">
+        <div className="flex items-center justify-between gap-3 mb-4">
           <div>
             <h2 className={`text-xl font-bold ${isDarkMode ? "text-white" : "text-gray-900"}`}>Track Library</h2>
-            <p className={`text-sm ${isDarkMode ? "text-gray-400" : "text-gray-600"}`}>{tracks.length} generated tracks</p>
+            <p className={`text-sm ${isDarkMode ? "text-white/65" : "text-black/45"}`}>Load to Deck A / B • Generated tracks appear here</p>
           </div>
+          <Badge variant="secondary" className={`${isDarkMode ? "bg-white/5" : "bg-black/5"} border border-white/10`}>
+            {tracks.length} tracks
+          </Badge>
         </div>
 
-        <ScrollArea className="h-[600px]">
-          {tracks.length === 0 ? (
-            <div
-              className={`p-12 rounded-2xl border-2 border-dashed ${
-                isDarkMode ? "border-gray-700" : "border-gray-300"
-              } text-center`}
-            >
-              <Music className={`w-16 h-16 mx-auto mb-4 ${isDarkMode ? "text-gray-600" : "text-gray-400"}`} />
-              <h3 className={`text-lg font-medium mb-2 ${isDarkMode ? "text-gray-400" : "text-gray-600"}`}>
-                No tracks yet
-              </h3>
-              <p className={`text-sm ${isDarkMode ? "text-gray-500" : "text-gray-500"}`}>
-                Generate your first track using the AI Generator
-              </p>
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {tracks.map((track) => (
-                <div
-                  key={track.id}
-                  className={`p-4 rounded-2xl ${
-                    isDarkMode ? "bg-gray-800/50 hover:bg-gray-800" : "bg-gray-50 hover:bg-gray-100"
-                  } transition-colors`}
-                >
-                  <div className="flex items-center justify-between gap-4">
-                    <div className="flex-1 min-w-0">
-                      <h3 className={`font-semibold truncate ${isDarkMode ? "text-white" : "text-gray-900"}`}>
-                        {track.name}
-                      </h3>
-                      <div className="flex items-center gap-2 mt-1 flex-wrap">
-                        <Badge variant="secondary" className="rounded-full text-xs">
-                          {track.bpm} BPM
-                        </Badge>
-                        <Badge variant="secondary" className="rounded-full text-xs">
-                          {track.key}
-                        </Badge>
-                        <Badge variant="secondary" className="rounded-full text-xs">
-                          {track.genre}
-                        </Badge>
-                        <Badge variant="secondary" className="rounded-full text-xs">
-                          {Math.floor(track.duration / 60)}:{(track.duration % 60).toString().padStart(2, "0")}
-                        </Badge>
-                      </div>
-                    </div>
-                    <div className="flex gap-2">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="rounded-xl"
-                        onClick={() => onLoadTrack(track, "A")}
-                      >
-                        Load A
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="rounded-xl"
-                        onClick={() => onLoadTrack(track, "B")}
-                      >
-                        Load B
-                      </Button>
-                      <Button variant="ghost" size="icon" className="rounded-xl">
-                        <Download className="w-4 h-4" />
-                      </Button>
+        <ScrollArea className="h-[calc(100vh-260px)] pr-4">
+          <div className="space-y-2">
+            {tracks.map((t) => (
+              <div
+                key={t.id}
+                className={`group flex items-center justify-between gap-3 p-3 rounded-2xl border transition-all ${
+                  isDarkMode ? "bg-white/5 hover:bg-white/8 border-white/10" : "bg-black/5 hover:bg-black/8 border-black/10"
+                }`}
+              >
+                <div className="flex items-center gap-4 min-w-0">
+                  <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-purple-500 to-blue-600 flex items-center justify-center shrink-0">
+                    <Music className="w-5 h-5 text-white" />
+                  </div>
+                  <div className="min-w-0">
+                    <div className={`font-bold text-sm truncate ${isDarkMode ? "text-white" : "text-gray-900"}`}>{t.name}</div>
+                    <div className={`text-xs flex gap-2 ${isDarkMode ? "text-white/65" : "text-black/45"}`}>
+                      <span>{t.bpm} BPM</span>
+                      <span>•</span>
+                      <span className="truncate">{t.genre}</span>
+                      {t.key ? (
+                        <>
+                          <span>•</span>
+                          <span>{t.key}</span>
+                        </>
+                      ) : null}
                     </div>
                   </div>
                 </div>
-              ))}
-            </div>
-          )}
+
+                <div className="flex gap-2 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity shrink-0">
+                  <Button size="sm" variant={isDarkMode ? "secondary" : "outline"} className="rounded-2xl" onClick={() => onLoadTrack(t, "A")}>
+                    Load A
+                  </Button>
+                  <Button size="sm" variant={isDarkMode ? "secondary" : "outline"} className="rounded-2xl" onClick={() => onLoadTrack(t, "B")}>
+                    Load B
+                  </Button>
+                </div>
+              </div>
+            ))}
+
+            {tracks.length === 0 && (
+              <div className={`text-center py-24 ${isDarkMode ? "text-white/65" : "text-black/45"}`}>
+                <Disc3 className="w-12 h-12 mx-auto mb-3 opacity-70" />
+                <p className="font-bold">Library empty</p>
+                <p className="text-sm opacity-80">Generate tracks in Studio to populate your crate.</p>
+              </div>
+            )}
+          </div>
         </ScrollArea>
       </CardContent>
     </Card>

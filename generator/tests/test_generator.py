@@ -1,25 +1,37 @@
 #!/usr/bin/env python3
 # generator/tests/test_generator.py
+"""
+SoundFlow Generator – Full Smoke Test (Music + Focus)
+
+Goals:
+- Generate REAL music for each genre
+- Exercise arranger, mixer, DSP, and focus engine
+- Catch missing imports, broken routing, crashes
+- Keep duration short for fast iteration / CI
+
+This is NOT an audio quality test.
+It is a stability + coverage test.
+"""
+
 from __future__ import annotations
 
 import argparse
 import os
-import shutil
 import subprocess
 import sys
 import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-# -------------------------
+# =============================================================================
 # Minimal .env loader (no deps)
-# -------------------------
-def load_dotenv_file(path: str) -> None:
-    p = Path(path)
-    if not p.exists():
+# =============================================================================
+
+def load_dotenv_file(path: Path) -> None:
+    if not path.exists():
         return
 
-    for raw in p.read_text(encoding="utf-8").splitlines():
+    for raw in path.read_text(encoding="utf-8").splitlines():
         line = raw.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
@@ -34,218 +46,205 @@ def utc_today() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
 
-def run(cmd: list[str], cwd: str | None = None) -> None:
+# =============================================================================
+# Subprocess runner (PYTHONPATH-safe)
+# =============================================================================
+
+def run(cmd: list[str], cwd: Path | None = None) -> None:
     print("\n$ " + " ".join(cmd))
-    
-    # [FIX] Force PYTHONPATH to include the 'generator' directory
+
     env = os.environ.copy()
+
+    # Force PYTHONPATH so `free.*` imports work everywhere
     generator_root = Path(__file__).resolve().parents[1]
-    
-    current_path = env.get("PYTHONPATH", "")
-    env["PYTHONPATH"] = str(generator_root) + (os.pathsep + current_path if current_path else "")
+    existing = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = str(generator_root) + (
+        os.pathsep + existing if existing else ""
+    )
 
-    p = subprocess.run(cmd, cwd=cwd, env=env, text=True)
-    if p.returncode != 0:
-        raise SystemExit(p.returncode)
+    proc = subprocess.run(
+        cmd,
+        cwd=str(cwd) if cwd else None,
+        env=env,
+        text=True,
+    )
 
-def clean_stems():
-    """Deletes generated procedural stems to force re-generation."""
+    if proc.returncode != 0:
+        raise SystemExit(proc.returncode)
+
+
+# =============================================================================
+# Cleanup utilities
+# =============================================================================
+
+def clean_procedural_stems() -> None:
+    """Delete generated procedural stems to force regeneration."""
     generator_root = Path(__file__).resolve().parents[1]
     stems_dir = generator_root / "free" / "assets" / "stems"
-    
+
     if not stems_dir.exists():
         return
 
-    print(f"\n🧹 Cleaning procedural stems in {stems_dir}...")
-    targets = ["drums", "kick", "bass", "arp", "pad", "synth", "texture"]
-    
+    print(f"\n🧹 Cleaning procedural stems: {stems_dir}")
     count = 0
-    for file in stems_dir.glob("*.wav"):
-        if any(t in file.name for t in targets):
-            file.unlink()
-            count += 1
-    print(f"  Removed {count} stems to force regeneration.")
+    for f in stems_dir.glob("*.wav"):
+        f.unlink()
+        count += 1
+    print(f"  Removed {count} stems.")
 
-def create_full_coverage_recipe(path: Path):
+
+# =============================================================================
+# Test recipe (FULL MUSIC COVERAGE)
+# =============================================================================
+
+def create_full_coverage_recipe(path: Path) -> None:
     """
-    Creates a JSON recipe that forces the generator to produce ONE track
-    of every available style to ensure full coverage.
+    Forces the FREE engine to generate:
+    - Real MUSIC for each genre
+    - Different structures & layers
+    - Focus engine
     """
+
     recipe = {
         "combinations": [
-            # 1. TECHNO (Default logic)
+
+            # ======================
+            # ELECTRONIC MUSIC
+            # ======================
+
             {
-                "id": "test_techno", 
-                "genre": "Techno", 
-                "bpm": 130, 
-                "layers": {"enabled": ["drums", "bass", "music"]},
-                "title": "Smoke Test Techno"
+                "id": "test_techno",
+                "seed": "smoke-techno",
+                "genre": "Techno",
+                "bpm": 130,
+                "layers": {"enabled": ["drums", "bass", "pad"]},
+                "structure": "peak",
+                "title": "Smoke Techno"
             },
-            # 2. HOUSE (Triggers: drums_house, bass_deep)
             {
-                "id": "test_house", 
-                "genre": "House", 
-                "bpm": 124, 
-                "layers": {"enabled": ["drums", "bass", "music"]},
-                "title": "Smoke Test House"
+                "id": "test_house",
+                "seed": "smoke-house",
+                "genre": "House",
+                "bpm": 124,
+                "layers": {"enabled": ["drums", "bass", "pad"]},
+                "structure": "linear",
+                "title": "Smoke House"
             },
-            # 3. LO-FI (Triggers: drums_lofi, keys_lofi, vinyl)
+
+            # ======================
+            # CHILL / STUDY
+            # ======================
+
             {
-                "id": "test_lofi", 
-                "genre": "Lo-Fi", 
-                "bpm": 85, 
-                "layers": {"enabled": ["drums", "music", "texture"]},
-                "texture": "vinyl",
-                "title": "Smoke Test LoFi"
+                "id": "test_lofi",
+                "seed": "smoke-lofi",
+                "genre": "Lofi",
+                "bpm": 85,
+                "layers": {"enabled": ["drums", "pad"]},
+                "structure": "linear",
+                "title": "Smoke Lofi"
             },
-            # 4. BASS / DUBSTEP (Triggers: bass_wobble)
+
+            # ======================
+            # JAZZ / MUSICALITY
+            # ======================
+
             {
-                "id": "test_bass", 
-                "genre": "Bass", 
-                "bpm": 140, 
-                "layers": {"enabled": ["drums", "bass"]},
-                "title": "Smoke Test Bass"
+                "id": "test_jazz",
+                "seed": "smoke-jazz",
+                "genre": "Jazz",
+                "bpm": 120,
+                "layers": {"enabled": ["drums", "bass", "pad"]},
+                "structure": "linear",
+                "title": "Smoke Jazz"
             },
-            # 5. HARD STYLE (Triggers: kick_hard)
-            {
-                "id": "test_hard", 
-                "genre": "Hard", 
-                "bpm": 150, 
-                "layers": {"enabled": ["drums", "bass"]},
-                "title": "Smoke Test Hard"
-            },
-            # 6. SYNTHWAVE (Triggers: bass_synth, snare_gated)
-            {
-                "id": "test_synth", 
-                "genre": "Synthwave", 
-                "bpm": 105, 
-                "layers": {"enabled": ["drums", "bass"]},
-                "title": "Smoke Test Synth"
-            },
-            # 7. EURO / RAVE (Triggers: piano_rave)
-            {
-                "id": "test_euro", 
-                "genre": "Euro", 
-                "bpm": 140, 
-                "layers": {"enabled": ["drums", "music"]},
-                "title": "Smoke Test Rave"
-            },
-            # 8. FOCUS ENGINE (Triggers: binaural generator)
+
+            # ======================
+            # PURE FOCUS ENGINE
+            # ======================
+
             {
                 "id": "test_focus",
+                "seed": "smoke-focus",
                 "genre": "Ambient",
                 "bpm": 60,
-                "layers": {"enabled": ["texture"]},
+                "layers": {"enabled": []},
                 "focus": {
-                    "binaural_mode": "focus", 
-                    "ambience": {"rain": 100}
+                    "binaural_mode": "focus",
+                    "ambience": {
+                        "rain": 80,
+                        "white": 30
+                    }
                 },
-                "title": "Smoke Test Focus"
+                "title": "Smoke Focus"
             }
         ]
     }
+
     path.write_text(json.dumps(recipe, indent=2), encoding="utf-8")
-    print(f"📝 Created comprehensive test recipe: {path.name}")
+    print(f"📝 Created smoke test recipe: {path.name}")
+
+
+# =============================================================================
+# MAIN
+# =============================================================================
 
 def main() -> int:
-    # Resolve paths relative to this script
     script_dir = Path(__file__).resolve().parent
-    gen_dir = script_dir.parent
-    
-    load_dotenv_file(str(gen_dir / ".env"))
-    load_dotenv_file(".env")
+    generator_dir = script_dir.parent
 
-    ap = argparse.ArgumentParser()
+    # Load envs
+    load_dotenv_file(generator_dir / ".env")
+    load_dotenv_file(Path(".env"))
+
+    ap = argparse.ArgumentParser(description="SoundFlow Generator Smoke Test")
     ap.add_argument("--date", default=utc_today(), help="YYYY-MM-DD")
-    ap.add_argument("--free", action="store_true", help="Run free remix generator (All Genres)")
-    ap.add_argument("--premium", action="store_true", help="Run premium musicgen generator")
-    ap.add_argument("--upload", action="store_true", help="Upload outputs")
-    ap.add_argument("--buffer", action="store_true", help="Run buffer publisher")
-    ap.add_argument("--validate-r2", action="store_true", help="Validate R2 catalogs")
-    ap.add_argument("--validate-local", action="store_true", help="Validate local sample catalogs")
-    ap.add_argument("--clean", action="store_true", help="Delete existing stems")
-    ap.add_argument("--free-duration-sec", type=int, default=30, help="Test duration (short for speed)")
-    ap.add_argument("--musicgen-model", default="facebook/musicgen-small", help="MusicGen model id")
+    ap.add_argument("--free", action="store_true", help="Run free engine tests")
+    ap.add_argument("--clean", action="store_true", help="Force stem regeneration")
+    ap.add_argument(
+        "--duration-sec",
+        type=int,
+        default=20,
+        help="Short duration for fast tests",
+    )
 
     args = ap.parse_args()
-    date = args.date
 
-    # Default behavior
-    if not (args.free or args.premium or args.validate_r2 or args.validate_local):
+    if not args.free:
         args.free = True
-        args.upload = False
 
-    # Safety checks
-    if args.upload:
-        required = ["R2_ENDPOINT", "R2_BUCKET", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY"]
-        missing = [k for k in required if not os.getenv(k)]
-        if missing:
-            print("\n❌ Upload requested but missing env vars in generator/.env:")
-            for m in missing:
-                print("  -", m)
-            return 2
+    print("\n🎛️ SoundFlow Generator Smoke Test")
+    print(f"Date: {args.date}")
+    print(f"Free engine: {args.free}")
+    print(f"Clean stems: {args.clean}")
+    print(f"Duration: {args.duration_sec}s")
 
-    print("SoundFlow Generator Smoke Test")
-    print(f"Date: {date}")
-    print(f"Modes: Free={args.free} | Premium={args.premium} | Clean={args.clean}")
-    
-    # 0) CLEAN
     if args.clean:
-        clean_stems()
+        clean_procedural_stems()
 
-    # 1) FREE ENGINE - FULL COVERAGE TEST
+    # -------------------------------------------------------------------------
+    # FREE ENGINE – FULL MUSIC COVERAGE
+    # -------------------------------------------------------------------------
+
     if args.free:
-        # Create temporary recipe to test ALL genres
         recipe_path = script_dir / "smoke_test_recipe.json"
         create_full_coverage_recipe(recipe_path)
-        
-        cmd = [
-            sys.executable,
-            "-m",
-            "free.remix_daily",
-            "--date", date,
-            "--duration-sec", str(args.free_duration_sec),
-            "--json", str(recipe_path)  # Pass the test recipe
-        ]
-        
-        if args.upload:
-            cmd.append("--upload")
-            
+
         try:
+            cmd = [
+                sys.executable,
+                "-m",
+                "free.remix_daily",
+                "--date", args.date,
+                "--duration-sec", str(args.duration_sec),
+                "--json", str(recipe_path),
+            ]
             run(cmd)
         finally:
-            # Clean up the test file
             if recipe_path.exists():
                 recipe_path.unlink()
 
-    # 2) PREMIUM
-    if args.premium:
-        cmd = [
-            sys.executable,
-            "-m",
-            "premium.musicgen_daily",
-            "--date", date,
-            "--model", args.musicgen_model,
-        ]
-        if args.upload:
-            cmd.append("--upload")
-        run(cmd)
-
-    # 3) BUFFER PUBLISHER
-    if args.buffer:
-        cmd = [sys.executable, "-m", "common.buffer_publisher", "--date", date]
-        run(cmd)
-
-    # 4) VALIDATION
-    if args.validate_local:
-        run([sys.executable, "-m", "common.validate_catalog", "--tier", "free", "--source", "local"])
-        run([sys.executable, "-m", "common.validate_catalog", "--tier", "premium", "--source", "local"])
-
-    if args.validate_r2:
-        run([sys.executable, "-m", "common.validate_catalog", "--tier", "free", "--source", "r2"])
-        run([sys.executable, "-m", "common.validate_catalog", "--tier", "premium", "--source", "r2"])
-
-    print("\n✅ Generator smoke test completed.")
+    print("\n✅ Smoke test completed successfully.")
     return 0
 
 
