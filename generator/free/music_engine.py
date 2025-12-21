@@ -342,12 +342,6 @@ osc = Oscillator()
 def create_energy_curve(total_samples: int, curve_type: str = "peak", rnd: Optional[np.random.RandomState] = None) -> np.ndarray:
     """
     Create energy envelope for entire track.
-    
-    Types:
-    - peak: Intro(low) → Build → Peak(high) → Breakdown → Outro
-    - drop: Start(high) → Drop(low) → Build → Peak
-    - linear: Steady increase from start to end
-    - build: Constant build-up to climax
     """
     if rnd is None:
         rnd = np.random.RandomState(0)
@@ -394,6 +388,17 @@ def create_energy_curve(total_samples: int, curve_type: str = "peak", rnd: Optio
     return curve.astype(np.float32)
 
 # =============================================================================
+# ENERGY CURVE DEFINITIONS (EXPORTED)
+# =============================================================================
+
+ENERGY_CURVES: Dict[str, str] = {
+    "peak": "Classic club track (intro → build → peak → breakdown → outro)",
+    "drop": "Bass/dubstep style (high → drop → low → build → peak)",
+    "build": "Progressive build (steady increase to climax)",
+    "linear": "Constant energy (steady throughout)",
+}
+
+# =============================================================================
 # GENRE STYLES
 # =============================================================================
 
@@ -412,20 +417,10 @@ GENRE_STYLES: Dict[str, Dict[str, Any]] = {
     "ambient": {"bpm": 70, "swing": 0.00, "brightness": 0.25, "reverb": 0.45, "duck": 0.15},
     "classic": {"bpm": 90, "swing": 0.00, "brightness": 0.30, "reverb": 0.38, "duck": 0.10},
     "vocal": {"bpm": 128, "swing": 0.02, "brightness": 0.65, "reverb": 0.28, "duck": 0.50},
+    "lofi": {"bpm": 85, "swing": 0.08, "brightness": 0.30, "reverb": 0.15, "duck": 0.20},
+    # ✅ JAZZ NOW SUPPORTED
+    "jazz": {"bpm": 120, "swing": 0.12, "brightness": 0.40, "reverb": 0.25, "duck": 0.10},
 }
-
-# =============================================================================
-# GENRE STYLES 
-# =============================================================================
-
-ENERGY_CURVES: Dict[str, str] = {
-    "peak": "Classic club track (intro → build → peak → breakdown → outro)",
-    "drop": "Bass/dubstep style (high → drop → low → build → peak)",
-    "build": "Progressive build (steady increase to climax)",
-    "linear": "Constant energy (steady throughout)",
-}
-
-
 
 def _norm_genre(genre: str) -> str:
     g = str(genre or "").strip().lower()
@@ -465,7 +460,6 @@ def _professional_kick(
     freq_sub = f0_sub * np.exp(-t * 18.0) + f1_sub
     phase_sub = np.cumsum(freq_sub) * (TWOPI / SAMPLE_RATE)
     sub = np.sin(phase_sub) * np.exp(-t * 8.0) * energy
-    # Add subharmonic
     sub += np.sin(phase_sub * 0.5) * np.exp(-t * 6.0) * (energy * 0.4)
     
     # Layer 2: Body (60-200Hz)
@@ -474,7 +468,6 @@ def _professional_kick(
     freq_body = f0_body * np.exp(-t * 20.0) + f1_body
     phase_body = np.cumsum(freq_body) * (TWOPI / SAMPLE_RATE)
     body = np.sin(phase_body) * np.exp(-t * 12.0) * energy
-    # Add 2nd harmonic
     body += np.sin(phase_body * 2.0) * np.exp(-t * 14.0) * (energy * 0.3)
     
     # Layer 3: Click (2-8kHz transient)
@@ -508,7 +501,7 @@ def _render_kick_long(
     bars: int = 16,
     energy_curve: Optional[np.ndarray] = None
 ) -> np.ndarray:
-    """Generate 16-32 bar kick pattern with evolution"""
+    """Generate evolving kick pattern"""
     beat = 60.0 / float(bpm)
     bar_samples = int(beat * 4.0 * SAMPLE_RATE)
     n = bar_samples * int(bars)
@@ -519,32 +512,28 @@ def _render_kick_long(
     g = _norm_genre(genre)
     x = np.zeros(n, dtype=np.float32)
     
-    # Generate high-quality kick
     kick_base = _professional_kick(bpm, rnd, energy=0.8, style=g)
     
-    # Pattern variation over bars
     for bar_idx in range(bars):
         bar_start = bar_idx * bar_samples
         bar_end = min(n, bar_start + bar_samples)
         bar_energy = energy_curve[bar_start:bar_end].mean()
         
-        # Regenerate kick with different energy every 4 bars
         if bar_idx % 4 == 0:
             kick = _professional_kick(bpm, rnd, energy=float(bar_energy), style=g)
         
-        # 4-on-the-floor for most genres
         if g in ("ambient", "chillout", "classic"):
-            hits = [0, 8]  # Half-time
+            hits = [0, 8]
+        elif g == "jazz":
+            hits = [0, 6, 8, 14] if rnd.rand() > 0.5 else [0, 8, 10]
         else:
-            hits = [0, 4, 8, 12]  # 4/4
+            hits = [0, 4, 8, 12]
         
-        # Place kicks
         step = int((beat / 4.0) * SAMPLE_RATE)
         for s in hits:
             pos = bar_start + s * step
             if pos + kick.size >= bar_end:
                 break
-            # Apply energy curve
             energy_mult = energy_curve[pos] if pos < len(energy_curve) else 1.0
             end = min(n, pos + kick.size)
             x[pos:end] += kick[:end-pos] * energy_mult
@@ -576,33 +565,21 @@ def _render_drums_long(
     
     x = np.zeros(n, dtype=np.float32)
     
-    # Generate percussion elements
+    # Percussion
     clap = rnd.randn(int(0.15 * SAMPLE_RATE)).astype(np.float32)
     clap = apply_highpass(clap, 900.0)
     clap = apply_lowpass(clap, 4800.0)
-    clap *= np.exp(-np.linspace(0, 18, clap.size)).astype(np.float32)
-    clap *= 0.7
+    clap *= np.exp(-np.linspace(0, 18, clap.size)).astype(np.float32) * 0.7
     
     hat_closed = rnd.randn(int(0.04 * SAMPLE_RATE)).astype(np.float32)
     hat_closed = apply_highpass(hat_closed, 5500.0)
-    hat_closed = apply_lowpass(hat_closed, 12000.0)
-    hat_closed *= np.exp(-np.linspace(0, 30, hat_closed.size)).astype(np.float32)
-    hat_closed *= 0.20
-    
-    hat_open = rnd.randn(int(0.08 * SAMPLE_RATE)).astype(np.float32)
-    hat_open = apply_highpass(hat_open, 4500.0)
-    hat_open = apply_lowpass(hat_open, 11000.0)
-    hat_open *= np.exp(-np.linspace(0, 12, hat_open.size)).astype(np.float32)
-    hat_open *= 0.25
-    
-    # Include kick
-    kick = _professional_kick(bpm, rnd, energy=0.8, style=g)
+    hat_closed *= np.exp(-np.linspace(0, 30, hat_closed.size)).astype(np.float32) * 0.20
     
     step = int((beat / 4.0) * SAMPLE_RATE)
     
     for bar_idx in range(bars):
         bar_start = bar_idx * bar_samples
-        is_fill_bar = (bar_idx % 8 == 7)  # Fill every 8 bars
+        is_fill_bar = (bar_idx % 8 == 7)
         is_breakdown = energy_curve[bar_start:min(n, bar_start + bar_samples)].mean() < 0.4
         
         for i in range(16):
@@ -612,39 +589,23 @@ def _render_drums_long(
             
             energy_mult = energy_curve[pos] if pos < len(energy_curve) else 1.0
             
-            # Kick (4-on-the-floor)
-            if i % 4 == 0 and not is_breakdown:
-                end = min(n, pos + kick.size)
-                x[pos:end] += kick[:end-pos] * energy_mult * 0.9
-            
-            # Clap/Snare (2 and 4)
+            # Clap/Snare
             if i in (4, 12) and not is_breakdown:
                 end = min(n, pos + clap.size)
                 x[pos:end] += clap[:end-pos] * energy_mult * 0.75
             
             # Hi-hats
-            if g in ("techno", "house", "deep", "edm", "dance", "trance"):
-                if i % 2 == 1:  # Offbeat closed hats
-                    end = min(n, pos + hat_closed.size)
-                    velocity = (0.6 + 0.3 * rnd.rand()) * energy_mult
-                    x[pos:end] += hat_closed[:end-pos] * velocity
-                
-                if i in (7, 15) and rnd.rand() < 0.6:  # Open hats
-                    end = min(n, pos + hat_open.size)
-                    x[pos:end] += hat_open[:end-pos] * energy_mult * 0.6
+            if i % 2 == 1:
+                end = min(n, pos + hat_closed.size)
+                x[pos:end] += hat_closed[:end-pos] * energy_mult
             
-            # Fill patterns
-            if is_fill_bar and i >= 12:
-                # Tom/percussion fill
-                fill_hit = rnd.randn(int(0.08 * SAMPLE_RATE)).astype(np.float32)
-                fill_hit = apply_highpass(fill_hit, 200.0)
-                fill_hit = apply_lowpass(fill_hit, 1500.0)
-                fill_hit *= np.exp(-np.linspace(0, 15, fill_hit.size)).astype(np.float32)
-                end = min(n, pos + fill_hit.size)
-                x[pos:end] += fill_hit[:end-pos] * 0.5
-    
-    # Tone shaping
-    if g in ("lofi", "chillout", "lounge", "ambient", "classic"):
+            # Jazz Swing Ride
+            if g == "jazz":
+                if i in (0, 2, 4, 6, 8, 10, 12, 14) or (i % 4 == 3):
+                    end = min(n, pos + hat_closed.size)
+                    x[pos:end] += hat_closed[:end-pos] * energy_mult * 0.8
+
+    if g in ("lofi", "chillout", "lounge"):
         x = apply_lowpass(x, 6500.0)
     else:
         x = apply_lowpass(x, 11000.0)
@@ -662,7 +623,7 @@ def _render_bass_long(
     bars: int = 16,
     energy_curve: Optional[np.ndarray] = None
 ) -> np.ndarray:
-    """Generate evolving bassline with progression"""
+    """Generate evolving bassline"""
     beat = 60.0 / float(bpm)
     bar_samples = int(beat * 4.0 * SAMPLE_RATE)
     n = bar_samples * int(bars)
@@ -674,25 +635,21 @@ def _render_bass_long(
     st = GENRE_STYLES[g]
     root = key_to_root_hz(key, octave=2)
     
-    # Musical progression (8-bar loop)
+    # Progressions
     if g in ("trance", "edm", "dance"):
-        prog_semis = [0, 0, 7, 0, 5, 0, 7, 0, 0, 12, 0, 7, 0, 5, 0, 7,
-                      -3, -3, 4, -3, 2, -3, 4, -3, 0, 7, 0, 4, 0, 7, 0, 12]
-    elif g in ("deep", "house", "lounge"):
-        prog_semis = [0, 0, 0, 7, 0, 0, 5, 0, 0, 7, 0, 0, 3, 0, 0, 5,
-                      -5, -5, 0, -5, 2, -5, 0, -5, 0, 5, 0, 7, 0, 5, 0, 10]
-    elif g in ("bass", "hard"):
-        prog_semis = [0, 0, 7, 0, 10, 0, 7, 0, 0, 0, 12, 0, 10, 0, 7, 0,
-                      -2, -2, 5, -2, 8, -2, 5, -2, 0, 7, 0, 12, 0, 7, 0, 14]
+        prog_semis = [0, 0, 7, 0, 5, 0, 7, 0, 0, 12, 0, 7, 0, 5, 0, 7]
+    elif g == "jazz":
+        prog_semis = [0, 4, 7, 11, 2, 5, 9, 0, -5, -2, 2, 5, 0, 4, 7, 11]
+    elif g in ("deep", "house"):
+        prog_semis = [0, 0, 0, 7, 0, 0, 5, 0, 0, 7, 0, 0, 3, 0, 0, 5]
     else:
-        prog_semis = [0, 0, 7, 0, 0, 10, 0, 0, 7, 0, 0, 3, 0, 0, 10, 0] * 2
+        prog_semis = [0, 0, 7, 0, 0, 10, 0, 0, 7, 0, 0, 3, 0, 0, 10, 0]
     
     x = np.zeros(n, dtype=np.float32)
     step = int((beat / 4.0) * SAMPLE_RATE)
     note_len = int(step * 0.88)
-    brightness = float(np.clip(st["brightness"], 0.25, 0.9))
     
-    for i in range(min(len(prog_semis), (n // step))):
+    for i in range(min(len(prog_semis) * 8, (n // step))):
         pos = i * step
         if pos + note_len >= n:
             break
@@ -700,31 +657,172 @@ def _render_bass_long(
         semi = prog_semis[i % len(prog_semis)]
         f = semitone(root, semi)
         
-        # Generate note
-        tone = osc.saw(f, note_len, brightness=brightness * 0.75)
+        # Jazz Walking Bass
+        if g == "jazz":
+             if i % 4 != 0: # Add chromatic approach notes
+                 f = semitone(root, semi + rnd.choice([-1, 1]))
         
-        # Envelope
+        tone = osc.saw(f, note_len, brightness=st["brightness"] * 0.75)
         bar_energy = energy_curve[pos:min(n, pos + note_len)].mean()
         env = _adsr(note_len, 0.005, 0.06, 0.30 * bar_energy, 0.04)
-        
         x[pos:pos+note_len] += tone * env
     
-    # Bass processing
-    if g in ("bass", "hard"):
-        x = apply_overdrive(x, drive=1.5)
-        x = apply_resonant_filter(x, cutoff=850.0 + 400 * rnd.rand(), resonance=0.25)
-    elif g in ("deep", "house", "lounge"):
-        x = apply_lowpass(x, 900.0)
-    else:
-        # Sweeping filter
-        cutoff_env = 450 + 600 * energy_curve[:n]
-        for i in range(0, n, 2048):
-            end = min(n, i + 2048)
-            chunk = x[i:end]
-            cutoff = cutoff_env[i:end].mean()
-            x[i:end] = apply_resonant_filter(chunk, cutoff=float(cutoff), resonance=0.20)
-    
+    x = apply_lowpass(x, 900.0)
     return mono_sum(x).astype(np.float32)
+
+# =============================================================================
+# VIRTUAL INSTRUMENTS (CLEANED / HOUSE-READY)
+# =============================================================================
+
+def _keytrack_lp(freq: float, base: float, amount: float, lo: float, hi: float) -> float:
+    """Simple keytracking for cutoff."""
+    f = float(max(20.0, freq))
+    cutoff = base + amount * (f ** 0.35)
+    return float(np.clip(cutoff, lo, hi))
+
+def _tiny_transient(rnd: np.random.RandomState, n: int, amp: float) -> np.ndarray:
+    """Short, band-limited transient for realism."""
+    if n <= 0: return np.zeros(0, dtype=np.float32)
+    x = rnd.randn(n).astype(np.float32) * float(amp)
+    x *= np.linspace(1.0, 0.0, n, dtype=np.float32)
+    x = apply_highpass(x, 1200.0)
+    x = apply_lowpass(x, 6500.0)
+    return x.astype(np.float32)
+
+def _generate_tone_fm_rhodes(
+    freq: float, duration_samples: int, velocity: float = 0.8, rnd: Optional[np.random.RandomState] = None
+) -> np.ndarray:
+    """Cleaner Deep House Rhodes/DX EP (No Christmas Bells)."""
+    if rnd is None: rnd = np.random.RandomState(0)
+    n = int(max(1, duration_samples))
+    f = float(max(20.0, freq))
+    vel = float(np.clip(velocity, 0.0, 1.2))
+    t = np.arange(n, dtype=np.float32) / SAMPLE_RATE
+
+    # Ratio 3.0 = Classic EP tone (Not 14.0 which is Bells)
+    ratio = 3.0 + 3.0 * float(rnd.rand()) 
+    mod_f = f * ratio
+    
+    # Mod Index
+    idx = (1.3 + 1.6 * vel) * np.exp(-t * (7.0 + 4.0 * vel))
+    mod = np.sin(TWOPI * mod_f * t) * idx
+    car = np.sin(TWOPI * f * t + mod)
+
+    # Body warmth
+    car += 0.18 * np.sin(TWOPI * (f * 2.0) * t)
+    
+    # Envelope
+    env = _adsr(n, 0.003, 0.22, 0.35 + 0.25 * vel, 0.14) * vel
+    y = (car * env).astype(np.float32)
+
+    # Cleanup
+    y = apply_highpass(y, 90.0)
+    return soft_clip(y * 1.05, threshold=0.92)
+
+def _generate_tone_organ_m1(
+    freq: float, duration_samples: int, velocity: float = 0.8, rnd: Optional[np.random.RandomState] = None
+) -> np.ndarray:
+    """Classic House Organ (Smoother, Lower Volume)."""
+    if rnd is None: rnd = np.random.RandomState(0)
+    n = int(max(1, duration_samples))
+    f = float(max(20.0, freq))
+    vel = float(np.clip(velocity, 0.0, 1.2))
+    t = np.arange(n, dtype=np.float32) / SAMPLE_RATE
+
+    # Classic Organ Partials
+    harmonics = [(1.0, 0.70), (2.0, 0.34), (3.0, 0.14), (4.0, 0.06)]
+    y = np.zeros(n, dtype=np.float32)
+    for ratio, amp in harmonics:
+        y += np.sin(TWOPI * (f * ratio) * t) * amp
+
+    # Woody Attack (Seed stable)
+    chiff_n = min(n, int(0.018 * SAMPLE_RATE))
+    y[:chiff_n] += _tiny_transient(rnd, chiff_n, amp=0.04 + 0.05 * vel)
+
+    # Envelope (Punchy)
+    env = _adsr(n, 0.004, 0.08, 0.92, 0.10) * vel
+    y *= env
+
+    # Tone Shaping
+    y = apply_highpass(y, 120.0)
+    y = apply_lowpass(y, _keytrack_lp(f, base=4800.0, amount=45.0, lo=2200.0, hi=9800.0))
+    y = soft_clip(y * 1.08, threshold=0.93)
+
+    # ✅ VOLUME REDUCTION (Prevents overpowering the mix)
+    return (y * 0.75).astype(np.float32)
+
+def _generate_tone_house_piano(
+    freq: float, duration_samples: int, velocity: float = 0.8, rnd: Optional[np.random.RandomState] = None
+) -> np.ndarray:
+    """Bright House Piano Stab (Korg M1 Piano style)."""
+    if rnd is None: rnd = np.random.RandomState(0)
+    n = int(max(1, duration_samples))
+    f = float(max(20.0, freq))
+    vel = float(np.clip(velocity, 0.0, 1.2))
+    t = np.arange(n, dtype=np.float32) / SAMPLE_RATE
+
+    # Synth Piano: Fundamental + Octave + Bite
+    y = np.sin(TWOPI * f * t) * 0.65
+    y += np.sin(TWOPI * (f * 2.0) * t) * 0.22
+    y += np.sin(TWOPI * (f * 3.0) * t) * 0.10 # 3rd harmonic bite
+
+    # Hammer Noise
+    atk_n = min(n, int(0.010 * SAMPLE_RATE))
+    y[:atk_n] += _tiny_transient(rnd, atk_n, amp=0.05 + 0.05 * vel)
+
+    # Fast Decay Envelope
+    env = np.exp(-t * (3.2 + 1.2 * (1.0 - vel))) * vel
+    y *= env
+
+    # Filter & Saturation
+    y = apply_highpass(y, 120.0)
+    return soft_clip(y * 1.1, threshold=0.92).astype(np.float32)
+
+def _generate_tone_pluck_analog(
+    freq: float, duration_samples: int, velocity: float = 0.8, rnd: Optional[np.random.RandomState] = None
+) -> np.ndarray:
+    """Analog Pluck with Filter Envelope."""
+    if rnd is None: rnd = np.random.RandomState(0)
+    n = int(max(1, duration_samples))
+    f = float(max(20.0, freq))
+    vel = float(np.clip(velocity, 0.0, 1.2))
+
+    # Use Sawtooth source
+    raw = osc.saw(f, n, brightness=0.85)
+    t = np.arange(n, dtype=np.float32) / SAMPLE_RATE
+    
+    # Fake Filter Envelope (Crossfade Bright -> Warm)
+    warm = apply_lowpass(raw, 2500.0)
+    bright = apply_lowpass(raw, 8000.0)
+    filt_env = np.exp(-t * 9.0)
+    y = bright * filt_env + warm * (1.0 - filt_env)
+
+    # Amp Envelope
+    amp = np.exp(-t * 8.0) * vel
+    y *= amp
+    
+    return apply_highpass(y, 120.0).astype(np.float32)
+
+def _generate_tone_piano_simple(
+    freq: float, duration_samples: int, velocity: float = 0.8, rnd: Optional[np.random.RandomState] = None
+) -> np.ndarray:
+    """Gentle Acoustic Piano."""
+    if rnd is None: rnd = np.random.RandomState(0)
+    n = int(max(1, duration_samples))
+    f = float(max(20.0, freq))
+    t = np.arange(n, dtype=np.float32) / SAMPLE_RATE
+
+    y = np.sin(TWOPI * f * t) * 0.65
+    y += np.sin(TWOPI * (f * 2.002) * t) * 0.20
+    y += np.sin(TWOPI * (f * 3.005) * t) * 0.08
+
+    env = np.exp(-t * 1.6) * velocity
+    y *= env
+    return apply_highpass(y, 80.0).astype(np.float32)
+
+# =============================================================================
+# MAIN MUSIC RENDERER
+# =============================================================================
 
 def _render_music_long(
     bpm: int,
@@ -736,7 +834,9 @@ def _render_music_long(
     bars: int = 16,
     energy_curve: Optional[np.ndarray] = None
 ) -> np.ndarray:
-    """Generate evolving melodic layer with chord progression"""
+    """
+    Generate professional melodic layers with adaptive instruments.
+    """
     beat = 60.0 / float(bpm)
     bar_samples = int(beat * 4.0 * SAMPLE_RATE)
     n = bar_samples * int(bars)
@@ -749,124 +849,141 @@ def _render_music_long(
     root = key_to_root_hz(key, octave=3)
     
     x = np.zeros(n, dtype=np.float32)
+
+    # 1. INSTRUMENT SELECTION (Adaptive)
+    # Don't use the same "Stupid Organ" for everything.
     
-    # Chord progressions (extended)
-    if g in ("trance", "edm", "dance"):
-        # i - VI - III - VII (x2)
-        prog = [
-            [0, 3, 7],
-            [-3, 0, 4],
-            [4, 7, 11],
-            [7, 10, 14],
-            [0, 3, 7],
-            [-5, -2, 2],
-            [2, 5, 9],
-            [7, 10, 14],
-        ]
-    elif g in ("deep", "house"):
-        prog = [
-            [0, 3, 7],
-            [-3, 0, 4],
-            [-5, -2, 2],
-            [-4, -1, 3],
-            [0, 4, 7],
-            [-3, 1, 5],
-            [-5, -1, 2],
-            [0, 3, 7],
-        ]
-    elif g in ("ambient", "chillout"):
-        prog = [
-            [0, 4, 7],
-            [0, 5, 9],
-            [0, 3, 7],
-            [0, 5, 10],
-        ]
-    else:
-        prog = [
-            [0, 3, 7],
-            [0, 5, 10],
-            [0, 3, 7],
-            [0, 7, 10],
-        ]
+    instrument = "saw" # Fallback
     
-    if g in ("ambient", "chillout"):
-        # Long pad chords
-        chord_len = bar_samples * (len(prog))
-        seg = n // len(prog)
+    if g in ("house", "deep"):
+        # House: Mix of Organ, Piano, and Rhodes
+        # Weighted to avoid organ fatigue
+        instrument = rnd.choice(["organ", "piano_house", "rhodes", "organ"], p=[0.3, 0.4, 0.2, 0.1])
+    elif g in ("jazz", "soul"):
+        instrument = rnd.choice(["rhodes", "piano_simple"])
+    elif g in ("trance", "edm"):
+        instrument = rnd.choice(["pluck", "supersaw"])
+    elif g in ("chillout", "lounge"):
+        instrument = "rhodes"
+    elif g in ("classic",):
+        instrument = "piano_simple"
+
+    # 2. PROGRESSIONS (Vibe)
+    prog = [[0, 3, 7], [0, 4, 7], [-2, 2, 5], [5, 9, 12]] # Default
+    
+    if g == "jazz":
+        prog = [[2, 5, 9, 12], [7, 11, 14, 17], [0, 4, 7, 11], [0, 4, 7, 11]]
+    elif g in ("house", "deep"):
+        # Classic House Minor 7ths
+        prog = [[0, 3, 7, 10], [7, 10, 14, 17], [-4, 0, 3, 7], [5, 8, 12, 15]]
+
+    # 3. RHYTHM STYLE
+    rhythm_style = rnd.choice(["sustained", "plucks", "offbeat"])
+    if g == "house": rhythm_style = "offbeat"
+    if g == "trance": rhythm_style = "plucks"
+    if g == "ambient": rhythm_style = "sustained"
+
+    chord_len = bar_samples
+    
+    for bar_idx in range(bars):
+        chord = prog[bar_idx % len(prog)]
+        bar_start = bar_idx * bar_samples
+        bar_energy = energy_curve[bar_start:min(n, bar_start + bar_samples)].mean()
         
-        for ci, chord in enumerate(prog):
-            pos = ci * seg
-            end = min(n, pos + seg)
+        # --- RHYTHM LOGIC ---
+        
+        if rhythm_style == "sustained":
+            # PADS
+            end = min(n, bar_start + chord_len)
+            dur = end - bar_start
+            
             freqs = [semitone(root, s) for s in chord]
+            chord_mix = np.zeros(dur, dtype=np.float32)
             
-            # Generate chord
-            chord_tone = np.zeros(end - pos, dtype=np.float32)
-            for f in freqs:
-                chord_tone += osc.saw(f, end - pos, brightness=0.35) * 0.33
+            for i, f in enumerate(freqs):
+                if i == 1: f *= 2.0 # Spread voicing
+                
+                # Render Tone
+                if instrument == "supersaw":
+                    tone = osc.supersaw(f, dur, detune=0.12)
+                elif instrument == "rhodes":
+                    tone = _generate_tone_fm_rhodes(f, dur, velocity=0.65, rnd=rnd)
+                else:
+                    tone = osc.saw(f, dur, brightness=0.4)
+                
+                chord_mix += tone * (0.8 / len(freqs))
             
-            bar_energy = energy_curve[pos:end].mean()
-            env = _adsr(end - pos, 0.12, 0.18, 0.55 * bar_energy, 0.30)
-            x[pos:end] += chord_tone * env * 0.5
-        
-        x = apply_lowpass(x, 5200.0)
-        x = apply_algorithmic_reverb(x, room_size=0.85, wet=0.45)
+            env = _adsr(dur, 0.2, 0.2, 0.7 * bar_energy, 0.5)
+            x[bar_start:end] += chord_mix * env
+
+        elif rhythm_style in ("plucks", "offbeat"):
+            # PATTERNS
+            step_size = int(beat * 0.25 * SAMPLE_RATE)
+            steps = 16
+            
+            for i in range(steps):
+                step_pos = bar_start + i * step_size
+                if step_pos >= n: break
+                
+                should_play = False
+                velocity = bar_energy
+                
+                # House Groove
+                if g in ("house", "deep"):
+                    if i % 4 == 2: should_play = True # The "And"
+                    if rnd.rand() < 0.15 and i % 4 == 3: should_play = True # Swing
+                elif g in ("trance", "edm"): 
+                    should_play = True
+                elif g == "jazz":
+                    if i in [0, 3, 6, 9, 12]: should_play = True
+
+                if should_play:
+                    dur = int(step_size * 0.8)
+                    freqs = [semitone(root, s) for s in chord]
+                    chord_mix = np.zeros(dur, dtype=np.float32)
+                    
+                    for f in freqs:
+                        # ✅ ORGAN RANGE SAFETY:
+                        # If instrument is Organ and pitch is too high (>800Hz), drop octave
+                        if instrument == "organ" and f > 800: f *= 0.5
+                        
+                        if instrument == "organ":
+                            tone = _generate_tone_organ_m1(f, dur, velocity, rnd)
+                        elif instrument == "piano_house":
+                            tone = _generate_tone_house_piano(f, dur, velocity, rnd)
+                        elif instrument == "rhodes":
+                            tone = _generate_tone_fm_rhodes(f, dur, velocity, rnd)
+                        elif instrument == "pluck":
+                            tone = _generate_tone_pluck_analog(f, dur, velocity, rnd)
+                        elif instrument == "piano_simple":
+                            tone = _generate_tone_piano_simple(f, dur, velocity, rnd)
+                        else:
+                            tone = osc.saw(f, dur, brightness=0.7) * np.exp(-np.linspace(0,10,dur))
+                            
+                        chord_mix += tone * (1.0 / len(freqs))
+                    
+                    x[step_pos:step_pos+dur] += chord_mix * 0.9
+
+    # --- MIXING ---
+    x = stereo_width(pan(x, 0.0), 1.5)
     
-    elif g in ("trance", "edm", "dance", "vocal"):
-        # Arpeggio/lead
-        notes = [0, 3, 7, 10, 12, 10, 7, 3]
-        step = int((beat / 4.0) * SAMPLE_RATE)
-        note_len = int(step * 0.70)
-        detune = 0.08 + 0.06 * rnd.rand()
-        
-        for i in range(n // step):
-            pos = i * step
-            if pos + note_len >= n:
-                break
-            
-            # Chord-aware arpeggio
-            chord_idx = (i // 16) % len(prog)
-            note_idx = i % len(notes)
-            semi = prog[chord_idx][note_idx % 3] + notes[note_idx] % 12
-            
-            f = semitone(root, semi)
-            tone = osc.supersaw(f, note_len, detune=detune, variation=0.5)
-            
-            bar_energy = energy_curve[pos:min(n, pos + note_len)].mean()
-            env = _adsr(note_len, 0.003, 0.03, 0.25 * bar_energy, 0.05)
-            x[pos:pos+note_len] += tone * env * (0.6 + 0.2 * bar_energy)
-        
-        x = stereo_width(pan(x, 0.0), 1.7)
-        x = apply_algorithmic_reverb(x, room_size=0.60, wet=float(st["reverb"]))
-        x = apply_sidechain_envelope(x, bpm, duck_amount=float(st["duck"]))
-    
-    else:
-        # Chord stabs
-        bars_per_chord = 2
-        chord_len = int(beat * 0.75 * SAMPLE_RATE)
-        
-        for bar_idx in range(0, bars, bars_per_chord):
-            chord_idx = (bar_idx // bars_per_chord) % len(prog)
-            pos = bar_idx * bar_samples
-            
-            if pos + chord_len >= n:
-                break
-            
-            freqs = [semitone(root, s) for s in prog[chord_idx]]
-            tone = np.zeros(chord_len, dtype=np.float32)
-            for f in freqs:
-                tone += osc.saw(f, chord_len, brightness=0.60) * 0.33
-            
-            bar_energy = energy_curve[pos:min(n, pos + chord_len)].mean()
-            env = _adsr(chord_len, 0.005, 0.08, 0.25 * bar_energy, 0.12)
-            x[pos:pos+chord_len] += tone * env * 0.7
-        
-        x = stereo_width(pan(x, 0.0), 1.4)
-        x = apply_algorithmic_reverb(x, room_size=0.65, wet=float(st["reverb"]))
-    
+    # FX per instrument
+    if instrument == "rhodes":
+        x = apply_algorithmic_reverb(x, room_size=0.5, wet=0.25)
+    elif instrument == "organ":
+        x = apply_highpass(x, 180.0) # Keep clean
+        x = apply_algorithmic_reverb(x, room_size=0.4, wet=0.15)
+    elif instrument == "piano_house":
+        x = apply_highpass(x, 150.0)
+        x = apply_algorithmic_reverb(x, room_size=0.6, wet=0.20)
+
+    # Sidechain
+    x = apply_sidechain_envelope(x, bpm, duck_amount=st["duck"])
+
     return x.astype(np.float32)
 
 def _render_texture(seconds: float, rnd: np.random.RandomState, kind: str) -> np.ndarray:
-    """Generate ambient texture"""
+    """Generate ambient texture (Optional)"""
     n = int(seconds * SAMPLE_RATE)
     kind = str(kind).lower().strip()
     
@@ -874,27 +991,22 @@ def _render_texture(seconds: float, rnd: np.random.RandomState, kind: str) -> np
         x = rnd.randn(n).astype(np.float32) * 0.02
         x = apply_highpass(x, 80.0)
         x = apply_lowpass(x, 5500.0)
-        # Crackles
         for _ in range(10 + rnd.randint(0, 18)):
             pos = rnd.randint(0, max(1, n - 220))
-            click = rnd.uniform(-1, 1, 220).astype(np.float32)
-            click *= np.exp(-np.linspace(0, 10, 220)).astype(np.float32)
-            x[pos:pos+220] += click * 0.05
-        return x.astype(np.float32)
+            click = rnd.uniform(-1, 1, 220).astype(np.float32) * 0.05
+            x[pos:pos+220] += click
+        return x
     
     if kind == "rain":
         x = rnd.randn(n).astype(np.float32) * 0.05
         x = apply_highpass(x, 150.0)
         x = apply_lowpass(x, 6500.0)
-        t = np.arange(n, dtype=np.float32) / SAMPLE_RATE
-        x *= (0.70 + 0.30 * np.sin(TWOPI * 0.08 * t)).astype(np.float32)
-        return x.astype(np.float32)
+        return x
     
-    # Air
+    # Default: light air noise
     x = rnd.randn(n).astype(np.float32) * 0.015
     x = apply_highpass(x, 300.0)
-    x = apply_lowpass(x, 8000.0)
-    return x.astype(np.float32)
+    return x
 
 # =============================================================================
 # MAIN PRODUCTION ENTRY: RENDER ANY STEM (WITH ENERGY CURVES)
@@ -909,12 +1021,13 @@ def render_stem(
     key: str = "A",
     seed: Optional[str | int] = None,
     variant: int = 1,
-    bars: int = 16,  # ✅ NOW DEFAULTS TO 16 BARS (1+ MINUTE)
+    bars: int = 16,
+    duration_sec: Optional[float] = None,  # ✅ AUTO-CALC BARS
     texture_type: str = "vinyl",
-    energy_curve: str = "peak",  # ✅ NEW: Energy progression
+    energy_curve: str = "peak",
 ) -> None:
     """
-    Render professional DJ-quality stem (1-2 minutes).
+    Render professional DJ-quality stem.
     
     Args:
         stem: "kick" | "drums" | "bass" | "music" | "pad" | "texture"
@@ -923,17 +1036,31 @@ def render_stem(
         key: Musical key
         seed: Deterministic seed
         variant: Variation number
-        bars: Length in bars (16 = ~1 min @ 128 BPM)
+        bars: Length in bars (default 16)
+        duration_sec: IF SET, OVERRIDES 'bars' to fill this duration
         energy_curve: "peak" | "drop" | "linear" | "build"
     """
     out_path.parent.mkdir(parents=True, exist_ok=True)
     stem_l = str(stem).lower().strip()
     
+    # Calculate beat info
+    beat = 60.0 / float(max(1e-6, bpm))
+    bar_duration = beat * 4.0
+
+    # ✅ AUTO-CALCULATE BARS IF DURATION IS PROVIDED
+    if duration_sec is not None and duration_sec > 0:
+        # Calculate how many bars fit in the requested duration
+        # We use ceil to ensure we cover the full duration
+        bars = int(np.ceil(duration_sec / bar_duration))
+    
+    # Ensure minimum length
+    bars = max(1, bars)
+    
+    # Init RNG with the calculated bar length so structure matches
     rnd = _rng(seed, salt=f"{genre}:{stem_l}:{bpm}:{key}:{bars}", variant=int(variant))
     
-    # Calculate duration
-    beat = 60.0 / float(max(1e-6, bpm))
-    seconds = beat * 4.0 * float(max(1, bars))
+    # Calculate exact sample length based on grid (bars)
+    seconds = bar_duration * float(bars)
     n = int(seconds * SAMPLE_RATE)
     
     # Create energy curve
@@ -954,12 +1081,13 @@ def render_stem(
         save_wav(out_path, x)
         return
     
-    if stem_l in ("music", "pad", "synth"):
+    if stem_l in ("music", "pad", "synth", "chords", "melody"):
         x = _render_music_long(bpm, key, rnd, variant=variant, genre=genre, bars=bars, energy_curve=energy_env)
         save_wav(out_path, x)
         return
     
     if stem_l in ("texture", "ambience"):
+        # For texture, we just use the raw seconds logic from the override or bars
         x = _render_texture(seconds, rnd, kind=texture_type)
         save_wav(out_path, x)
         return

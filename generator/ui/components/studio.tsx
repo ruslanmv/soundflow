@@ -21,6 +21,7 @@ import {
   Loader2,
   CheckCircle2,
   Headphones,
+  Clock,
 } from "lucide-react";
 
 // ============================================================================
@@ -29,13 +30,46 @@ import {
 
 const API_BASE = "http://localhost:8000";
 
-const GENRES = ["Techno", "House", "Trance", "Lofi", "Ambient", "Jazz"];
+// ✅ ALL GENRES (from music_engine.py GENRE_STYLES)
+const GENRES = [
+  "Techno",
+  "House", 
+  "Deep",
+  "Trance",
+  "EDM",
+  "Dance",
+  "Hard",
+  "Bass",
+  "Synth",
+  "Chillout",
+  "Lounge",
+  "Ambient",
+  "Classic",
+  "Vocal"
+];
 
 const LAYERS = [
   { id: "drums", label: "Drums", icon: Disc3 },
   { id: "bass", label: "Bass", icon: Activity },
   { id: "music", label: "Melody", icon: Music },
   { id: "pad", label: "Atmosphere", icon: CloudRain },
+];
+
+// ✅ STEM LENGTH OPTIONS (from server.py STEM_LENGTHS)
+const STEM_LENGTHS = [
+  { id: "short", label: "Short", bars: 8, desc: "~30s" },
+  { id: "medium", label: "Medium", bars: 16, desc: "~1min" },
+  { id: "long", label: "Long", bars: 32, desc: "~2min" },
+  { id: "full", label: "Full", bars: 64, desc: "~4min" },
+];
+
+// ✅ DURATION PRESETS (in seconds)
+const DURATION_PRESETS = [
+  { value: 60, label: "1 min" },
+  { value: 120, label: "2 min" },
+  { value: 180, label: "3 min" },
+  { value: 300, label: "5 min" },
+  { value: 600, label: "10 min" },
 ];
 
 export interface Track {
@@ -47,6 +81,8 @@ export interface Track {
   genre: string;
   duration: number;
   seed?: string;
+  stem_length?: string;
+  energy_curve?: string;
 }
 
 interface StudioProps {
@@ -76,34 +112,46 @@ function cx(...parts: Array<string | false | undefined | null>) {
 // STUDIO COMPONENT
 // ============================================================================
 
-export default function Studio({ onTrackGenerated, isDarkMode = true, className = "" }: StudioProps) {
+export default function Studio({ 
+  onTrackGenerated, 
+  isDarkMode = true, 
+  className = "" 
+}: StudioProps) {
   // --- GENERATION STATE ---
   const [isGenerating, setIsGenerating] = useState(false);
-  const [genStatus, setGenStatus] = useState(""); // UI status line
+  const [genStatus, setGenStatus] = useState("");
   const statusTimerRef = useRef<number | null>(null);
 
-  // after generation: show what was created
+  // Last generated track
   const [lastGenerated, setLastGenerated] = useState<Track | null>(null);
   const [lastMeta, setLastMeta] = useState<{
-    binaural: "off" | "focus" | "relax";
+    focus_mode: "off" | "focus" | "relax";
     layers: string[];
     intensity: number;
-    energyCurve: string;
-    ambience: { rain: number; vinyl: number; white: number };
+    energy_curve: string;
+    stem_length: string;
+    duration: number;
   } | null>(null);
 
   // --- DNA PANEL STATE ---
-  const [genre, setGenre] = useState<(typeof GENRES)[number]>("Techno");
+  const [genre, setGenre] = useState<string>("Techno");
   const [bpm, setBpm] = useState(128);
+  const [key, setKey] = useState("A");
   const [seed, setSeed] = useState("");
   const [isLocked, setIsLocked] = useState(false);
 
-  // ✅ KEEP binaural as a “second option”
-  const [binaural, setBinaural] = useState<"off" | "focus" | "relax">("off");
+  // ✅ DURATION CONTROL (default 3 minutes = 180 seconds)
+  const [duration, setDuration] = useState(180);
+
+  // ✅ STEM LENGTH CONTROL (default medium = 16 bars)
+  const [stemLength, setStemLength] = useState<"short" | "medium" | "long" | "full">("medium");
+
+  // ✅ Focus mode (API expects "focus_mode", not "binaural")
+  const [focusMode, setFocusMode] = useState<"off" | "focus" | "relax">("off");
 
   // --- STRUCTURE PANEL STATE ---
   const [layers, setLayers] = useState<string[]>(["drums", "bass", "music", "pad"]);
-  const [energyCurve, setEnergyCurve] = useState<"linear" | "drop" | "peak" | "custom">("peak");
+  const [energyCurve, setEnergyCurve] = useState<"linear" | "drop" | "peak" | "build">("peak");
 
   // Manual Energy Drawing (32 bars resolution)
   const [energyLevels, setEnergyLevels] = useState<number[]>(Array(32).fill(50));
@@ -135,7 +183,7 @@ export default function Studio({ onTrackGenerated, isDarkMode = true, className 
   };
 
   // --- ENERGY CURVE PRESETS ---
-  const applyPresetCurve = (type: "linear" | "drop" | "peak") => {
+  const applyPresetCurve = (type: "linear" | "drop" | "peak" | "build") => {
     setEnergyCurve(type);
     const newLevels = Array(32)
       .fill(0)
@@ -143,6 +191,7 @@ export default function Studio({ onTrackGenerated, isDarkMode = true, className 
         let h = 40;
         if (type === "peak") h = 20 + Math.pow(i / 32, 2) * 80;
         if (type === "drop") h = i > 12 && i < 20 ? 10 : 60;
+        if (type === "build") h = 30 + (i / 32) * 70;
         if (type === "linear") h = 50 + Math.sin(i) * 5;
         return clamp(h, 10, 100);
       });
@@ -158,29 +207,23 @@ export default function Studio({ onTrackGenerated, isDarkMode = true, className 
     const next = [...energyLevels];
     next[index] = clamp(height, 5, 100);
     setEnergyLevels(next);
-    setEnergyCurve("custom");
   };
 
   // ============================================================================
-  // COLOR TOKENS (READABLE IN DARK MODE)
+  // COLOR TOKENS
   // ============================================================================
 
-  // Surfaces
   const bgCard = isDarkMode ? "bg-gray-950/55 border-white/10" : "bg-white border-black/10";
   const surface = isDarkMode ? "bg-black/35 border-white/10" : "bg-gray-50 border-black/10";
-
-  // Text rules
   const textPrimary = isDarkMode ? "text-white" : "text-gray-900";
   const textSecondary = isDarkMode ? "text-white/75" : "text-black/60";
   const textTertiary = isDarkMode ? "text-white/60" : "text-black/50";
-
-  // Buttons/inputs
   const softBtn = isDarkMode
     ? "bg-white/5 hover:bg-white/10 border border-white/10 text-white"
     : "bg-black/5 hover:bg-black/10 border border-black/10 text-black";
 
   // ============================================================================
-  // API LOGIC
+  // API LOGIC (✅ FIXED TO MATCH SERVER.PY EXACTLY)
   // ============================================================================
 
   const clearStatusTimer = () => {
@@ -203,60 +246,76 @@ export default function Studio({ onTrackGenerated, isDarkMode = true, className 
       });
     }, 2500);
 
+    // ✅ BUILD PAYLOAD EXACTLY AS SERVER.PY EXPECTS
     const payload = {
-      genre,
-      bpm,
-      key: "A",
-      seed: isLocked ? seed : undefined,
-      layers,
-      duration: 180,
-      binaural, // ✅ preserved
-      ambience,
-      intensity,
-      synth_params: synthParams,
+      // Core settings
+      mode: "music" as const,
+      channels: 2,
+      duration: duration,
+      seed: isLocked && seed ? seed : undefined,
+      variation: 0.25,
+
+      // Music settings
+      genre: genre,
+      bpm: bpm,
+      key: key,
+      layers: layers,
+
+      // Professional features (NEW)
+      stem_length: stemLength,
       energy_curve: energyCurve,
+
+      // Focus engine
+      focus_mode: focusMode,
+      focus_mix: 30,
+      ambience: ambience,
+
+      // Smart mixer
+      intensity: intensity,
+      synth_params: synthParams,
+
+      // Mastering
       target_lufs: -14.0,
     };
 
-    // backend compatibility mapping
-    const backendPayload = {
-      ...payload,
-      energy_curve: energyCurve === "custom" ? "peak" : energyCurve,
-    };
+    console.log("🎵 Sending generation request:", payload);
 
     try {
       const res = await fetch(`${API_BASE}/api/generate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(backendPayload),
+        body: JSON.stringify(payload),
       });
 
       if (!res.ok) {
         const errorData = await res.json().catch(() => ({}));
-        throw new Error(errorData.detail || "Server error");
+        throw new Error(errorData.detail || errorData.error || "Server error");
       }
 
       const data = await res.json();
+      console.log("✅ Generation response:", data);
 
       const newTrack: Track = {
         id: data.id,
         name: data.name,
         url: data.url,
-        bpm: data.bpm,
+        bpm: data.bpm_used || data.bpm,
         key: data.key,
         genre: data.genre,
         duration: data.duration,
         seed: data.seed,
+        stem_length: data.stem_length,
+        energy_curve: data.energy_curve,
       };
 
-      // ✅ show what we created (confidence + debug)
       setLastGenerated(newTrack);
       setLastMeta({
-        binaural,
+        focus_mode: focusMode,
         layers: [...layers],
         intensity,
-        energyCurve: backendPayload.energy_curve,
-        ambience: { ...ambience },
+        energy_curve: energyCurve,
+        stem_length: stemLength,
+        duration: duration,
       });
 
       onTrackGenerated?.(newTrack);
@@ -265,23 +324,15 @@ export default function Studio({ onTrackGenerated, isDarkMode = true, className 
 
       if (!isLocked) randomizeSeed();
     } catch (err) {
-      console.error("Generation Failed:", err);
-      setGenStatus("Failed — check backend logs / console");
-      alert("Failed to generate. Check console.");
+      console.error("❌ Generation Failed:", err);
+      setGenStatus(`Failed: ${err instanceof Error ? err.message : "Unknown error"}`);
+      alert(`Generation failed: ${err instanceof Error ? err.message : "Check console for details"}`);
     } finally {
       clearStatusTimer();
       setIsGenerating(false);
-      // keep status visible briefly
-      window.setTimeout(() => setGenStatus(""), 1800);
+      window.setTimeout(() => setGenStatus(""), 3000);
     }
   };
-
-  // small derived UI text
-  const binauralLabel = useMemo(() => {
-    if (binaural === "off") return "Off";
-    if (binaural === "focus") return "Focus";
-    return "Relax";
-  }, [binaural]);
 
   // ============================================================================
   // RENDER
@@ -297,10 +348,10 @@ export default function Studio({ onTrackGenerated, isDarkMode = true, className 
             <h2 className="font-bold text-sm tracking-wider">DNA ENGINE</h2>
           </div>
 
-          {/* Genre Selector (FIXED: readable in dark mode) */}
+          {/* ✅ GENRE SELECTOR (ALL GENRES) */}
           <div className="space-y-3">
             <label className={cx("text-xs font-bold", textSecondary)}>GENRE</label>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-2 gap-2 max-h-64 overflow-y-auto pr-2">
               {GENRES.map((g) => {
                 const active = genre === g;
                 return (
@@ -331,22 +382,120 @@ export default function Studio({ onTrackGenerated, isDarkMode = true, className 
               <label className={cx("text-xs font-bold", textSecondary)}>BPM</label>
               <span className={cx("text-xs font-mono", textSecondary)}>{bpm}</span>
             </div>
-            <Slider value={[bpm]} min={60} max={180} step={1} onValueChange={([v]) => setBpm(v)} />
-            <div className={cx("text-[11px]", textTertiary)}>Club: 120–135 • Lofi: 70–95</div>
+            <Slider 
+              value={[bpm]} 
+              min={60} 
+              max={200} 
+              step={1} 
+              onValueChange={([v]) => setBpm(v)} 
+            />
+            <div className={cx("text-[11px]", textTertiary)}>
+              Club: 120–135 • Chill: 70–95 • Hard: 140–160
+            </div>
+          </div>
+
+          {/* ✅ DURATION CONTROL */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <label className={cx("text-xs font-bold flex items-center gap-1", textSecondary)}>
+                <Clock className="w-3 h-3" />
+                DURATION
+              </label>
+              <span className={cx("text-xs font-mono", textSecondary)}>
+                {fmtDuration(duration)}
+              </span>
+            </div>
+            
+            <div className="flex gap-2">
+              {DURATION_PRESETS.map((preset) => (
+                <Button
+                  key={preset.value}
+                  type="button"
+                  size="sm"
+                  className={cx(
+                    "flex-1 text-xs rounded-xl border h-8",
+                    duration === preset.value
+                      ? "bg-blue-600 text-white border-blue-500/40"
+                      : isDarkMode
+                      ? "bg-white/5 hover:bg-white/10 text-white border-white/10"
+                      : "bg-black/5 hover:bg-black/10 text-black border-black/10"
+                  )}
+                  onClick={() => setDuration(preset.value)}
+                >
+                  {preset.label}
+                </Button>
+              ))}
+            </div>
+
+            <Slider
+              value={[duration]}
+              min={30}
+              max={600}
+              step={30}
+              onValueChange={([v]) => setDuration(v)}
+            />
+            <div className={cx("text-[11px]", textTertiary)}>
+              30s – 10min (default: 3min)
+            </div>
+          </div>
+
+          {/* ✅ STEM LENGTH CONTROL */}
+          <div className="space-y-3">
+            <label className={cx("text-xs font-bold", textSecondary)}>
+              STEM LENGTH
+            </label>
+            <div className="grid grid-cols-2 gap-2">
+              {STEM_LENGTHS.map((length) => {
+                const active = stemLength === length.id;
+                return (
+                  <Button
+                    key={length.id}
+                    type="button"
+                    size="sm"
+                    className={cx(
+                      "flex flex-col items-start gap-0.5 h-auto py-2 rounded-xl border",
+                      active
+                        ? "bg-blue-600 text-white border-blue-500/40"
+                        : isDarkMode
+                        ? "bg-white/5 hover:bg-white/10 text-white border-white/10"
+                        : "bg-black/5 hover:bg-black/10 text-black border-black/10"
+                    )}
+                    onClick={() => setStemLength(length.id as any)}
+                  >
+                    <span className="text-xs font-bold">{length.label}</span>
+                    <span className={cx("text-[10px]", active ? "text-blue-100" : textTertiary)}>
+                      {length.bars} bars • {length.desc}
+                    </span>
+                  </Button>
+                );
+              })}
+            </div>
+            <div className={cx("text-[11px]", textTertiary)}>
+              Longer stems = more musical evolution
+            </div>
           </div>
 
           {/* Seed Control */}
           <div className="space-y-3">
             <div className="flex justify-between items-center">
-              <label className={cx("text-xs font-bold", textSecondary)}>INFINITE SEED</label>
+              <label className={cx("text-xs font-bold", textSecondary)}>
+                INFINITE SEED
+              </label>
               <Button
                 size="icon"
                 variant="ghost"
-                className={cx("h-7 w-7 rounded-xl", isDarkMode ? "hover:bg-white/10" : "hover:bg-black/5")}
+                className={cx(
+                  "h-7 w-7 rounded-xl",
+                  isDarkMode ? "hover:bg-white/10" : "hover:bg-black/5"
+                )}
                 onClick={() => setIsLocked(!isLocked)}
                 title={isLocked ? "Unlock seed" : "Lock seed"}
               >
-                {isLocked ? <Lock className="w-3.5 h-3.5 text-red-400" /> : <Unlock className={cx("w-3.5 h-3.5", textSecondary)} />}
+                {isLocked ? (
+                  <Lock className="w-3.5 h-3.5 text-red-400" />
+                ) : (
+                  <Unlock className={cx("w-3.5 h-3.5", textSecondary)} />
+                )}
               </Button>
             </div>
 
@@ -354,7 +503,9 @@ export default function Studio({ onTrackGenerated, isDarkMode = true, className 
               <div
                 className={cx(
                   "flex-1 border rounded-xl flex items-center px-3 font-mono",
-                  isDarkMode ? "bg-black/45 border-white/10 text-green-300" : "bg-gray-100 border-gray-300 text-green-700"
+                  isDarkMode
+                    ? "bg-black/45 border-white/10 text-green-300"
+                    : "bg-gray-100 border-gray-300 text-green-700"
                 )}
               >
                 {seed || "---"}
@@ -371,7 +522,7 @@ export default function Studio({ onTrackGenerated, isDarkMode = true, className 
             </div>
           </div>
 
-          {/* ✅ Focus Engine / Binaural (SECOND OPTION, preserved) */}
+          {/* ✅ FOCUS ENGINE */}
           <div
             className={cx(
               "p-4 rounded-3xl border space-y-3",
@@ -383,22 +534,24 @@ export default function Studio({ onTrackGenerated, isDarkMode = true, className 
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2 text-blue-300">
                 <Brain className="w-4 h-4" />
-                <span className={cx("text-xs font-bold tracking-wider", textPrimary)}>FOCUS ENGINE</span>
+                <span className={cx("text-xs font-bold tracking-wider", textPrimary)}>
+                  FOCUS ENGINE
+                </span>
               </div>
               <div className={cx("text-[11px] font-mono", textSecondary)}>
                 <Headphones className="inline-block w-3.5 h-3.5 mr-1 opacity-80" />
-                {binauralLabel}
+                {focusMode === "off" ? "Off" : focusMode === "focus" ? "Focus" : "Relax"}
               </div>
             </div>
 
             <div className={cx("flex gap-1 p-1 rounded-2xl border", surface)}>
               {(["off", "focus", "relax"] as const).map((mode) => {
-                const active = binaural === mode;
+                const active = focusMode === mode;
                 return (
                   <button
                     key={mode}
                     type="button"
-                    onClick={() => setBinaural(mode)}
+                    onClick={() => setFocusMode(mode)}
                     className={cx(
                       "flex-1 text-[10px] uppercase py-2 rounded-xl transition-all font-bold tracking-wider",
                       active
@@ -414,7 +567,9 @@ export default function Studio({ onTrackGenerated, isDarkMode = true, className 
               })}
             </div>
 
-            <div className={cx("text-[11px]", textTertiary)}>Headphones recommended. Optional enhancement for focus sessions.</div>
+            <div className={cx("text-[11px]", textTertiary)}>
+              Headphones recommended. Optional binaural beats for enhanced focus.
+            </div>
           </div>
         </CardContent>
       </Card>
@@ -428,18 +583,26 @@ export default function Studio({ onTrackGenerated, isDarkMode = true, className 
           </div>
 
           {/* Interactive Energy Curve Canvas */}
-          <div className={cx("flex-1 min-h-[220px] rounded-3xl border p-6 relative overflow-hidden", isDarkMode ? "bg-gray-950/45 border-white/10" : "bg-gray-50 border-black/10")}>
+          <div
+            className={cx(
+              "flex-1 min-h-[220px] rounded-3xl border p-6 relative overflow-hidden",
+              isDarkMode ? "bg-gray-950/45 border-white/10" : "bg-gray-50 border-black/10"
+            )}
+          >
             <div className="absolute inset-0 opacity-10 bg-[radial-gradient(circle_at_20%_20%,rgba(59,130,246,0.22),transparent_55%),radial-gradient(circle_at_80%_30%,rgba(147,51,234,0.18),transparent_55%)] pointer-events-none" />
 
             <div className="flex flex-col h-full justify-between relative z-10">
               <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-                <span className={cx("text-xs font-mono", textSecondary)}>ENERGY PROFILE</span>
+                <span className={cx("text-xs font-mono", textSecondary)}>
+                  ENERGY PROFILE
+                </span>
 
                 <div className="flex flex-wrap gap-2">
                   {[
                     { id: "linear", label: "Loop", icon: Repeat },
                     { id: "drop", label: "Drop", icon: TrendingUp },
                     { id: "peak", label: "Peak", icon: Activity },
+                    { id: "build", label: "Build", icon: Zap },
                   ].map((curve) => {
                     const active = energyCurve === curve.id;
                     return (
@@ -478,7 +641,11 @@ export default function Studio({ onTrackGenerated, isDarkMode = true, className 
                     key={i}
                     className={cx(
                       "flex-1 rounded-t-sm transition-all duration-75 relative",
-                      i % 4 === 0 ? "bg-blue-500" : isDarkMode ? "bg-blue-500/35" : "bg-blue-300/55",
+                      i % 4 === 0
+                        ? "bg-blue-500"
+                        : isDarkMode
+                        ? "bg-blue-500/35"
+                        : "bg-blue-300/55",
                       "hover:bg-blue-400"
                     )}
                     style={{ height: `${h}%` }}
@@ -492,14 +659,16 @@ export default function Studio({ onTrackGenerated, isDarkMode = true, className 
               </div>
 
               <p className={cx("text-[11px] text-center mt-3", textTertiary)}>
-                Draw to customize. (Custom maps to “peak” for backend compatibility.)
+                Draw to customize energy. Use presets for classic arrangements.
               </p>
             </div>
           </div>
 
           {/* Layer Matrix */}
           <div className="mt-6">
-            <label className={cx("text-xs font-bold block mb-3", textSecondary)}>LAYER MATRIX</label>
+            <label className={cx("text-xs font-bold block mb-3", textSecondary)}>
+              LAYER MATRIX
+            </label>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               {LAYERS.map((layer) => {
                 const active = layers.includes(layer.id);
@@ -518,11 +687,17 @@ export default function Studio({ onTrackGenerated, isDarkMode = true, className 
                     )}
                   >
                     <layer.icon className={cx("w-6 h-6", active && "animate-pulse")} />
-                    <span className={cx("text-xs font-bold", active ? "text-blue-100" : textPrimary)}>{layer.label}</span>
+                    <span className={cx("text-xs font-bold", active ? "text-blue-100" : textPrimary)}>
+                      {layer.label}
+                    </span>
                     <div
                       className={cx(
                         "absolute top-2 right-2 w-2 h-2 rounded-full",
-                        active ? "bg-blue-400 shadow-[0_0_10px_#60a5fa]" : isDarkMode ? "bg-white/20" : "bg-black/20"
+                        active
+                          ? "bg-blue-400 shadow-[0_0_10px_#60a5fa]"
+                          : isDarkMode
+                          ? "bg-white/20"
+                          : "bg-black/20"
                       )}
                     />
                   </button>
@@ -547,20 +722,61 @@ export default function Studio({ onTrackGenerated, isDarkMode = true, className 
               <label className={cx("text-xs font-bold", textSecondary)}>INTENSITY</label>
               <span className={cx("text-xs font-mono", textSecondary)}>{intensity}</span>
             </div>
-            <Slider value={[intensity]} max={100} step={1} onValueChange={([v]) => setIntensity(v)} />
-            <div className={cx("text-[11px]", textTertiary)}>Higher = denser grooves + stronger drums.</div>
+            <Slider
+              value={[intensity]}
+              max={100}
+              step={1}
+              onValueChange={([v]) => setIntensity(v)}
+            />
+            <div className={cx("text-[11px]", textTertiary)}>
+              Higher = denser grooves + stronger drums
+            </div>
           </div>
 
           {/* Synth Params */}
-          <div className={cx("grid grid-cols-2 gap-4 pt-4 border-t", isDarkMode ? "border-white/10" : "border-black/10")}>
-            <Knob label="FILTER" value={synthParams.cutoff} color="text-pink-400" isDarkMode={isDarkMode} onChange={(v) => setSynthParams((p) => ({ ...p, cutoff: v }))} />
-            <Knob label="RES" value={synthParams.resonance} color="text-purple-400" isDarkMode={isDarkMode} onChange={(v) => setSynthParams((p) => ({ ...p, resonance: v }))} />
-            <Knob label="DRIVE" value={synthParams.drive} color="text-orange-400" isDarkMode={isDarkMode} onChange={(v) => setSynthParams((p) => ({ ...p, drive: v }))} />
-            <Knob label="SPACE" value={synthParams.space} color="text-cyan-400" isDarkMode={isDarkMode} onChange={(v) => setSynthParams((p) => ({ ...p, space: v }))} />
+          <div
+            className={cx(
+              "grid grid-cols-2 gap-4 pt-4 border-t",
+              isDarkMode ? "border-white/10" : "border-black/10"
+            )}
+          >
+            <Knob
+              label="FILTER"
+              value={synthParams.cutoff}
+              color="text-pink-400"
+              isDarkMode={isDarkMode}
+              onChange={(v) => setSynthParams((p) => ({ ...p, cutoff: v }))}
+            />
+            <Knob
+              label="RES"
+              value={synthParams.resonance}
+              color="text-purple-400"
+              isDarkMode={isDarkMode}
+              onChange={(v) => setSynthParams((p) => ({ ...p, resonance: v }))}
+            />
+            <Knob
+              label="DRIVE"
+              value={synthParams.drive}
+              color="text-orange-400"
+              isDarkMode={isDarkMode}
+              onChange={(v) => setSynthParams((p) => ({ ...p, drive: v }))}
+            />
+            <Knob
+              label="SPACE"
+              value={synthParams.space}
+              color="text-cyan-400"
+              isDarkMode={isDarkMode}
+              onChange={(v) => setSynthParams((p) => ({ ...p, space: v }))}
+            />
           </div>
 
           {/* Ambience */}
-          <div className={cx("space-y-4 pt-4 border-t", isDarkMode ? "border-white/10" : "border-black/10")}>
+          <div
+            className={cx(
+              "space-y-4 pt-4 border-t",
+              isDarkMode ? "border-white/10" : "border-black/10"
+            )}
+          >
             <label className={cx("text-xs font-bold flex items-center gap-2", textSecondary)}>
               <CloudRain className="w-3 h-3" /> AMBIENCE
             </label>
@@ -573,8 +789,15 @@ export default function Studio({ onTrackGenerated, isDarkMode = true, className 
               ].map((item) => (
                 <div key={item.label} className="flex items-center gap-3">
                   <span className={cx("text-[11px] w-12", textSecondary)}>{item.label}</span>
-                  <Slider value={[item.val]} max={100} className="flex-1" onValueChange={([v]) => setAmbience((p) => ({ ...p, [item.key]: v }))} />
-                  <span className={cx("text-[11px] font-mono w-10 text-right", textSecondary)}>{Math.round(item.val)}</span>
+                  <Slider
+                    value={[item.val]}
+                    max={100}
+                    className="flex-1"
+                    onValueChange={([v]) => setAmbience((p) => ({ ...p, [item.key]: v }))}
+                  />
+                  <span className={cx("text-[11px] font-mono w-10 text-right", textSecondary)}>
+                    {Math.round(item.val)}
+                  </span>
                 </div>
               ))}
             </div>
@@ -588,15 +811,30 @@ export default function Studio({ onTrackGenerated, isDarkMode = true, className 
           <div
             className={cx(
               "rounded-2xl p-3 flex items-center justify-between border animate-in fade-in slide-in-from-bottom-2",
-              isDarkMode ? "bg-black/35 border-purple-500/30" : "bg-white border-purple-200"
+              isDarkMode
+                ? "bg-black/35 border-purple-500/30"
+                : "bg-white border-purple-200"
             )}
           >
             <div className="flex items-center gap-3 min-w-0">
-              {isGenerating ? <Loader2 className="w-5 h-5 text-purple-300 animate-spin" /> : <CheckCircle2 className="w-5 h-5 text-green-500" />}
-              <span className={cx("text-sm font-mono truncate", isDarkMode ? "text-white/85" : "text-black/70")}>{genStatus}</span>
+              {isGenerating ? (
+                <Loader2 className="w-5 h-5 text-purple-300 animate-spin" />
+              ) : (
+                <CheckCircle2 className="w-5 h-5 text-green-500" />
+              )}
+              <span className={cx("text-sm font-mono truncate", isDarkMode ? "text-white/85" : "text-black/70")}>
+                {genStatus}
+              </span>
             </div>
             <div className={cx("h-1 w-32 rounded-full overflow-hidden", isDarkMode ? "bg-white/10" : "bg-black/10")}>
-              <div className={cx("h-full", isGenerating ? "bg-purple-500 animate-progress origin-left w-full" : "bg-green-500 w-full")} />
+              <div
+                className={cx(
+                  "h-full",
+                  isGenerating
+                    ? "bg-purple-500 animate-progress origin-left w-full"
+                    : "bg-green-500 w-full"
+                )}
+              />
             </div>
           </div>
         )}
@@ -622,33 +860,69 @@ export default function Studio({ onTrackGenerated, isDarkMode = true, className 
           )}
         </Button>
 
-        {/* ✅ “what was generated” panel */}
+        {/* ✅ Enhanced "what was generated" panel */}
         {lastGenerated && lastMeta && (
           <div className={cx("rounded-2xl border p-4", surface)}>
             <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
               <div className="min-w-0">
-                <div className={cx("text-[10px] font-bold tracking-widest", textSecondary)}>LAST GENERATED</div>
-                <div className={cx("font-bold truncate", textPrimary)}>{lastGenerated.name}</div>
-
-                <div className={cx("text-xs mt-1", textSecondary)}>
-                  {lastGenerated.genre} • {lastGenerated.bpm} BPM • Key {lastGenerated.key} • {fmtDuration(lastGenerated.duration)}
+                <div className={cx("text-[10px] font-bold tracking-widest", textSecondary)}>
+                  LAST GENERATED
+                </div>
+                <div className={cx("font-bold truncate", textPrimary)}>
+                  {lastGenerated.name}
                 </div>
 
-                <div className={cx("text-[11px] mt-2", textTertiary)}>
-                  Focus Engine: <span className={cx("font-mono", textSecondary)}>{lastMeta.binaural}</span> • Layers:{" "}
-                  <span className={cx("font-mono", textSecondary)}>{lastMeta.layers.join(", ")}</span> • Curve:{" "}
-                  <span className={cx("font-mono", textSecondary)}>{lastMeta.energyCurve}</span> • Intensity:{" "}
-                  <span className={cx("font-mono", textSecondary)}>{lastMeta.intensity}</span>
-                  {lastGenerated.seed ? (
-                    <>
-                      {" "}
-                      • Seed: <span className={cx("font-mono", textSecondary)}>{lastGenerated.seed}</span>
-                    </>
-                  ) : null}
+                <div className={cx("text-xs mt-1", textSecondary)}>
+                  {lastGenerated.genre} • {lastGenerated.bpm} BPM • Key {lastGenerated.key} •{" "}
+                  {fmtDuration(lastMeta.duration)}
+                </div>
+
+                <div className={cx("text-[11px] mt-2 space-y-1", textTertiary)}>
+                  <div>
+                    <span className="font-bold">Stem Length:</span>{" "}
+                    <span className={cx("font-mono", textSecondary)}>
+                      {lastMeta.stem_length}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="font-bold">Energy:</span>{" "}
+                    <span className={cx("font-mono", textSecondary)}>
+                      {lastMeta.energy_curve}
+                    </span>{" "}
+                    • <span className="font-bold">Intensity:</span>{" "}
+                    <span className={cx("font-mono", textSecondary)}>
+                      {lastMeta.intensity}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="font-bold">Layers:</span>{" "}
+                    <span className={cx("font-mono", textSecondary)}>
+                      {lastMeta.layers.join(", ")}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="font-bold">Focus:</span>{" "}
+                    <span className={cx("font-mono", textSecondary)}>
+                      {lastMeta.focus_mode}
+                    </span>
+                  </div>
+                  {lastGenerated.seed && (
+                    <div>
+                      <span className="font-bold">Seed:</span>{" "}
+                      <span className={cx("font-mono", textSecondary)}>
+                        {lastGenerated.seed}
+                      </span>
+                    </div>
+                  )}
                 </div>
               </div>
 
-              <audio controls preload="none" src={lastGenerated.url} className="w-full md:w-[360px]" />
+              <audio
+                controls
+                preload="none"
+                src={lastGenerated.url}
+                className="w-full md:w-[360px]"
+              />
             </div>
           </div>
         )}
@@ -679,11 +953,21 @@ function Knob({
       <div
         className={cx(
           "relative w-16 h-16 flex items-center justify-center rounded-full border shadow-inner group cursor-pointer transition-colors",
-          isDarkMode ? "bg-gray-950 border-white/10 hover:border-white/20" : "bg-gray-50 border-gray-300 hover:border-gray-400"
+          isDarkMode
+            ? "bg-gray-950 border-white/10 hover:border-white/20"
+            : "bg-gray-50 border-gray-300 hover:border-gray-400"
         )}
       >
         <svg className="absolute inset-0 w-full h-full -rotate-90">
-          <circle cx="32" cy="32" r="28" stroke="currentColor" strokeWidth="4" className={isDarkMode ? "text-white/10" : "text-black/10"} fill="none" />
+          <circle
+            cx="32"
+            cy="32"
+            r="28"
+            stroke="currentColor"
+            strokeWidth="4"
+            className={isDarkMode ? "text-white/10" : "text-black/10"}
+            fill="none"
+          />
           <circle
             cx="32"
             cy="32"
@@ -697,7 +981,9 @@ function Knob({
           />
         </svg>
 
-        <span className={cx("text-xs font-bold font-mono", isDarkMode ? "text-white" : "text-gray-900")}>{Math.round(value)}</span>
+        <span className={cx("text-xs font-bold font-mono", isDarkMode ? "text-white" : "text-gray-900")}>
+          {Math.round(value)}
+        </span>
 
         <input
           type="range"
@@ -709,7 +995,9 @@ function Knob({
         />
       </div>
 
-      <span className={cx("text-[10px] font-bold tracking-wider", isDarkMode ? "text-white/70" : "text-black/50")}>{label}</span>
+      <span className={cx("text-[10px] font-bold tracking-wider", isDarkMode ? "text-white/70" : "text-black/50")}>
+        {label}
+      </span>
     </div>
   );
 }

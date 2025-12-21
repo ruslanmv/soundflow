@@ -1,24 +1,14 @@
 #!/usr/bin/env python3
 # generator/free/remix_daily.py
 """
-SoundFlow Music Generation Engine - Remix Daily v6.0 (PROFESSIONAL DJ QUALITY)
+SoundFlow Music Generation Engine - Remix Daily v6.1 (STEREO & CLUB MIX)
 
-✅ NEW FEATURES:
-- Long stems (16-32 bars / 1-2 minutes)
-- Energy curves (peak, drop, linear, build)
-- Dynamic arrangement (intro/build/peak/breakdown/outro)
-- Professional 3-layer kicks
-- Chord progressions with evolution
-- Filter sweeps and automation
-- Drum fills and variations
-- Broadcast-quality mixing
-
-Supports:
-- All electronic genres (Techno, House, Trance, Deep, Bass, Hard)
-- Chill/ambient (Lo-Fi, Ambient, Chillout, Lounge)
-- Jazz & Soul (Jazz, Neo-Soul)
-- Piano & Classical
-- Focus sessions (Binaural beats)
+✅ UPGRADES v6.1:
+- True Stereo Pipeline (No more mono collapse)
+- Club-Standard Bass Management (Mono < 120Hz)
+- Split-Band Filtering (Kick stays punchy while synths filter)
+- Analog-style Saturation curves
+- "Air" EQ boost for electronic genres
 """
 
 from __future__ import annotations
@@ -37,13 +27,8 @@ import yaml
 from scipy.io import wavfile
 
 from free.music_engine import (
-    # PRIMARY API - Professional stem rendering
     render_stem,
-    
-    # FOCUS ENGINE
     generate_focus_session,
-    
-    # DSP for mixing
     apply_overdrive,
     apply_algorithmic_reverb,
     apply_lowpass,
@@ -82,21 +67,88 @@ OUT = Path(".soundflow_out/free")
 # CONFIGURATION
 # =============================================================================
 
-# Professional stem lengths (in bars)
 STEM_LENGTHS = {
-    "short": 8,      # ~30s @ 128 BPM
-    "medium": 16,    # ~1min @ 128 BPM (DEFAULT)
-    "long": 32,      # ~2min @ 128 BPM
-    "full": 64,      # ~4min @ 128 BPM
+    "short": 8,
+    "medium": 16,
+    "long": 32,
+    "full": 64,
 }
 
-# Energy curve presets
 ENERGY_CURVES = {
     "peak": "Classic club track (intro → build → peak → breakdown → outro)",
     "drop": "Bass/dubstep style (high → drop → low → build → peak)",
     "build": "Progressive build (steady increase to climax)",
     "linear": "Constant energy (steady throughout)",
 }
+
+# =============================================================================
+# AUDIO UTILS (STEREO AWARE)
+# =============================================================================
+
+def _to_stereo(x: np.ndarray) -> np.ndarray:
+    """
+    Ensure audio is stereo float32.
+    Accepts: mono (N,) or stereo (N,2).
+    """
+    if x is None:
+        return np.zeros((0, 2), dtype=np.float32)
+    x = x.astype(np.float32, copy=False)
+    if x.ndim == 1:
+        # Duplicate mono channel to L/R
+        return np.stack([x, x], axis=1).astype(np.float32, copy=False)
+    if x.ndim == 2 and x.shape[1] == 2:
+        return x.astype(np.float32, copy=False)
+    # Fallback: flatten to mono then duplicate
+    m = x.reshape(-1).astype(np.float32, copy=False)
+    return np.stack([m, m], axis=1).astype(np.float32, copy=False)
+
+def _mono_below(audio: np.ndarray, cutoff_hz: float = 120.0) -> np.ndarray:
+    """
+    Make low frequencies mono (club standard), keep highs stereo.
+    Works on stereo arrays (N,2).
+    """
+    a = _to_stereo(audio)
+    # Split bands L/R independent
+    low_l = apply_lowpass(a[:, 0], cutoff_hz)
+    low_r = apply_lowpass(a[:, 1], cutoff_hz)
+    
+    # Mono Sum the low end
+    low_m = 0.5 * (low_l + low_r)
+    
+    # Extract highs
+    high_l = a[:, 0] - low_l
+    high_r = a[:, 1] - low_r
+    
+    # Recombine: Mono Lows + Stereo Highs
+    out_l = low_m + high_l
+    out_r = low_m + high_r
+    return np.stack([out_l, out_r], axis=1).astype(np.float32)
+
+def _safe_read_wav(path: Path) -> np.ndarray:
+    """
+    Read WAV into float32 stereo. Supports int16/float WAV.
+    """
+    try:
+        rate, data = wavfile.read(str(path))
+    except Exception:
+        return np.zeros((0, 2), dtype=np.float32)
+
+    if data.dtype == np.int16:
+        x = (data.astype(np.float32) / 32768.0)
+    else:
+        x = data.astype(np.float32, copy=False)
+    return _to_stereo(x)
+
+def _write_wav(path: Path, audio: np.ndarray) -> None:
+    """
+    Write float32 stereo/mono to int16 WAV.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    x = np.clip(audio.astype(np.float32, copy=False), -1.0, 1.0)
+    if x.ndim == 2 and x.shape[1] == 2:
+        wavfile.write(str(path), SAMPLE_RATE, (x * 32767.0).astype(np.int16))
+    else:
+        wavfile.write(str(path), SAMPLE_RATE, (x.reshape(-1) * 32767.0).astype(np.int16))
 
 # =============================================================================
 # SAFETY
@@ -129,12 +181,7 @@ def load_presets() -> dict:
         return {"presets": []}
     return yaml.safe_load(p.read_text(encoding="utf-8"))
 
-# =============================================================================
-# OPTIONAL FALLBACK LIBRARY (Legacy support)
-# =============================================================================
-
 def ensure_procedural_library(date_seed: str) -> None:
-    """Legacy fallback - not needed for render_stem"""
     STEMS_DIR.mkdir(parents=True, exist_ok=True)
     return
 
@@ -169,156 +216,85 @@ def soften_nature_bed(in_wav: Path, out_wav: Path, gain_db: float = -18.0) -> No
 # =============================================================================
 
 def detect_stem_type(filename: str) -> str:
-    """Detect stem type from filename"""
     name = filename.lower()
-    
-    # Kicks
-    if "kick" in name:
-        return "kick"
-    
-    # Bass
-    if "bass" in name:
-        return "bass"
-    
-    # Drums
-    if "drum" in name or "snare" in name or "clap" in name or "hat" in name:
-        return "drums"
-    
-    # Melodic
-    if "arp" in name:
-        return "arp"
-    if "synth" in name or "lead" in name:
-        return "synth"
-    if "chord" in name or "stab" in name:
-        return "chords"
-    if "piano" in name or "rhodes" in name:
-        return "piano"
-    if "pad" in name or "string" in name:
-        return "pad"
-    
-    # Textures
-    if "texture" in name or "vinyl" in name or "rain" in name or "room" in name:
-        return "texture"
-    
+    if "kick" in name: return "kick"
+    if "bass" in name: return "bass"
+    if "drum" in name or "snare" in name or "clap" in name or "hat" in name: return "drums"
+    if "arp" in name: return "arp"
+    if "synth" in name or "lead" in name: return "synth"
+    if "chord" in name or "stab" in name: return "chords"
+    if "piano" in name or "rhodes" in name: return "piano"
+    if "pad" in name or "string" in name: return "pad"
+    if "texture" in name or "vinyl" in name or "rain" in name or "room" in name: return "texture"
     return "other"
 
 def apply_stem_eq(audio: np.ndarray, stem_type: str, genre: str) -> np.ndarray:
-    """
-    Genre-aware EQ carving for professional separation.
-    """
+    """Genre-aware EQ carving."""
+    # Ensure stereo input for processing filters
+    audio = _to_stereo(audio)
     
-    if stem_type == "kick":
-        # Kick: Boost sub, cut mids
-        audio = apply_highpass(audio, 25)
-        audio = apply_parametric_eq(audio, 60, gain_db=2.5, q=1.2)
-        audio = apply_parametric_eq(audio, 300, gain_db=-3, q=2.0)
-        if "hard" in genre.lower() or "bass" in genre.lower():
-            audio = apply_parametric_eq(audio, 100, gain_db=3.0, q=1.0)
-    
-    elif stem_type == "bass":
-        # Bass: Duck for kick, control lows
-        audio = apply_highpass(audio, 35)
-        audio = apply_parametric_eq(audio, 55, gain_db=-5, q=1.5)
-        audio = apply_lowpass(audio, 4500)
-        if "deep" in genre.lower() or "house" in genre.lower():
-            audio = apply_parametric_eq(audio, 80, gain_db=1.5, q=0.8)
-    
-    elif stem_type in ("synth", "arp"):
-        # Synths: Remove lows, boost presence
-        audio = apply_highpass(audio, 180)
-        audio = apply_parametric_eq(audio, 2800, gain_db=1.5, q=0.8)
-        if "trance" in genre.lower():
-            audio = apply_parametric_eq(audio, 5000, gain_db=1.0, q=0.5)
-    
-    elif stem_type in ("pad", "chords"):
-        # Pads: Remove lows, make spacious
-        audio = apply_highpass(audio, 220)
-        audio = apply_lowpass(audio, 8000)
-        audio = apply_parametric_eq(audio, 1200, gain_db=0.8, q=0.6)
-    
-    elif stem_type == "piano":
-        # Piano: Natural warmth
-        audio = apply_highpass(audio, 80)
-        audio = apply_parametric_eq(audio, 250, gain_db=1.2, q=0.8)
-        audio = apply_parametric_eq(audio, 3500, gain_db=0.8, q=0.5)
-    
-    elif stem_type == "drums":
-        # Full drums: Preserve transients
-        audio = apply_highpass(audio, 40)
-        audio = apply_parametric_eq(audio, 80, gain_db=1.5, q=1.0)
-        audio = apply_parametric_eq(audio, 8000, gain_db=1.0, q=0.4)
-    
-    elif stem_type == "texture":
-        # Textures: High-pass aggressively
-        audio = apply_highpass(audio, 450)
-        audio = apply_lowpass(audio, 7500)
-    
-    return audio
+    # Process both channels symmetrically
+    def _eq(ch):
+        if stem_type == "kick":
+            ch = apply_highpass(ch, 25)
+            ch = apply_parametric_eq(ch, 60, gain_db=2.5, q=1.2)
+            ch = apply_parametric_eq(ch, 300, gain_db=-3, q=2.0)
+            if "hard" in genre.lower() or "bass" in genre.lower():
+                ch = apply_parametric_eq(ch, 100, gain_db=3.0, q=1.0)
+        elif stem_type == "bass":
+            ch = apply_highpass(ch, 35)
+            ch = apply_parametric_eq(ch, 55, gain_db=-5, q=1.5) # Slot for kick
+            ch = apply_lowpass(ch, 4500)
+        elif stem_type in ("synth", "arp"):
+            ch = apply_highpass(ch, 180)
+            ch = apply_parametric_eq(ch, 2800, gain_db=1.5, q=0.8)
+        elif stem_type in ("pad", "chords"):
+            ch = apply_highpass(ch, 220)
+            ch = apply_lowpass(ch, 8000)
+        elif stem_type == "piano":
+            ch = apply_highpass(ch, 80)
+            ch = apply_parametric_eq(ch, 250, gain_db=1.2, q=0.8)
+        elif stem_type == "drums":
+            ch = apply_highpass(ch, 40)
+            ch = apply_parametric_eq(ch, 80, gain_db=1.5, q=1.0)
+            ch = apply_parametric_eq(ch, 8000, gain_db=1.0, q=0.4)
+        elif stem_type == "texture":
+            ch = apply_highpass(ch, 450)
+            ch = apply_lowpass(ch, 7500)
+        return ch
+
+    l = _eq(audio[:, 0])
+    r = _eq(audio[:, 1])
+    return np.stack([l, r], axis=1)
 
 def master_chain(audio: np.ndarray, genre: str) -> np.ndarray:
-    """
-    Professional mastering chain with genre-specific processing.
-    """
-    if audio.size < 64:
-        return audio.astype(np.float32)
+    """Professional mastering chain."""
+    if audio.size < 64: return audio
+    
+    audio = _to_stereo(audio)
     
     # 1. Subsonic filter
     audio = apply_highpass(audio, 20, order=4)
     
-    # 2. Genre-specific EQ
+    # 2. Genre-specific EQ (Gentle master bus adjustments)
     if "jazz" in genre.lower() or "soul" in genre.lower():
-        # Jazz: Natural warmth
         audio = apply_parametric_eq(audio, 100, gain_db=0.5, q=0.8)
-        audio = apply_parametric_eq(audio, 2500, gain_db=0.3, q=0.6)
-        audio = apply_parametric_eq(audio, 8000, gain_db=0.2, q=0.5)
+        audio = apply_parametric_eq(audio, 8000, gain_db=0.3, q=0.5)
+    elif "electronic" in genre.lower() or "house" in genre.lower() or "techno" in genre.lower():
+        audio = apply_parametric_eq(audio, 70, gain_db=0.8, q=0.7) # Kick weight
+        audio = apply_parametric_eq(audio, 10000, gain_db=0.5, q=0.4) # Air
     
-    elif "piano" in genre.lower() or "classical" in genre.lower():
-        # Piano: Natural resonance
-        audio = apply_parametric_eq(audio, 250, gain_db=0.6, q=0.7)
-        audio = apply_parametric_eq(audio, 3000, gain_db=0.4, q=0.5)
-        audio = apply_parametric_eq(audio, 10000, gain_db=0.3, q=0.4)
+    # 3. Glue Compression (Multiband)
+    audio = multiband_process(audio, low_gain=1.03, mid_gain=0.99, high_gain=1.02)
     
-    elif "ambient" in genre.lower() or "chill" in genre.lower():
-        # Ambient: Smooth, wide
-        audio = apply_parametric_eq(audio, 60, gain_db=0.4, q=0.6)
-        audio = apply_parametric_eq(audio, 5000, gain_db=0.2, q=0.4)
-        audio = apply_parametric_eq(audio, 12000, gain_db=0.4, q=0.3)
+    # 4. Soft Clip (Saturation before limiting)
+    audio = soft_clip(audio * 1.1, threshold=0.90)
     
-    else:
-        # Electronic: Punchy, bright
-        audio = apply_parametric_eq(audio, 80, gain_db=0.8, q=0.7)
-        audio = apply_parametric_eq(audio, 3000, gain_db=0.5, q=0.5)
-        audio = apply_parametric_eq(audio, 10000, gain_db=0.3, q=0.4)
+    # 5. True Peak Limit
+    audio = np.clip(audio, -0.98, 0.98)
     
-    # 3. Multiband compression
-    if "ambient" in genre.lower() or "piano" in genre.lower():
-        audio = multiband_process(audio, low_gain=1.02, mid_gain=0.99, high_gain=1.01)
-    else:
-        audio = multiband_process(audio, low_gain=1.05, mid_gain=0.98, high_gain=1.02)
-    
-    # 4. Soft clipping
-    if "jazz" in genre.lower() or "classical" in genre.lower():
-        audio = soft_clip(audio * 1.05, threshold=0.90)
-    else:
-        audio = soft_clip(audio * 1.1, threshold=0.85)
-    
-    # 5. Final normalization
-    if "techno" in genre.lower() or "hard" in genre.lower() or "bass" in genre.lower():
-        target_rms = 0.15  # Loud
-    elif "jazz" in genre.lower() or "classical" in genre.lower():
-        target_rms = 0.10  # Dynamic
-    else:
-        target_rms = 0.12  # Balanced
-    
-    rms = float(np.sqrt(np.mean(audio ** 2))) if audio.size else 0.0
-    if rms > 1e-6:
-        audio = audio * (target_rms / rms)
-    
-    # 6. True peak limiting
-    audio = np.clip(audio, -0.95, 0.95)
-    
-    # 7. Final normalize
-    audio = normalize(audio, target=0.97)
+    # 6. Final Normalize
+    audio = normalize(audio, target=0.98)
     
     return audio.astype(np.float32)
 
@@ -329,31 +305,26 @@ def professional_mix(
     synth_params: Optional[dict] = None
 ) -> None:
     """
-    Professional mixing with genre-aware processing.
+    Professional mixing with STEREO processing.
     """
     stems: List[Dict[str, Any]] = []
     max_len = 0
     
     for stem_path in stem_paths:
-        if stem_path is None:
-            continue
-        rate, data = wavfile.read(str(stem_path))
-        if data.dtype == np.int16:
-            data = data.astype(np.float32) / 32768.0
-        if data.ndim > 1:
-            data = data[:, 0]  # Mono for now
+        if stem_path is None: continue
+        # ✅ LOAD AS STEREO
+        data = _safe_read_wav(stem_path)
         
         stems.append({
-            "audio": data.astype(np.float32, copy=False),
+            "audio": data,
             "path": stem_path,
             "type": detect_stem_type(stem_path.name),
         })
-        max_len = max(max_len, len(data))
+        max_len = max(max_len, data.shape[0])
     
     if not stems:
         raise RuntimeError("No stems to mix")
     
-    # Process each stem
     processed: List[np.ndarray] = []
     
     for stem in stems:
@@ -361,156 +332,132 @@ def professional_mix(
         st = stem["type"]
         
         # Pad to same length
-        if len(audio) < max_len:
-            audio = np.pad(audio, (0, max_len - len(audio)))
+        if audio.shape[0] < max_len:
+            pad_amt = max_len - audio.shape[0]
+            audio = np.pad(audio, ((0, pad_amt), (0, 0)))
         
-        # Apply genre-aware EQ
+        # EQ
         audio = apply_stem_eq(audio, st, genre)
         
-        # Genre-specific gain staging
-        if "jazz" in genre.lower() or "soul" in genre.lower():
-            gain_map = {
-                "drums": 0.65, "kick": 0.70,
-                "bass": 0.68,
-                "piano": 0.75,
-                "pad": 0.38,
-                "texture": 0.15,
-            }
-        elif "ambient" in genre.lower() or "piano" in genre.lower():
-            gain_map = {
-                "piano": 0.80,
-                "pad": 0.48,
-                "texture": 0.18,
-            }
-        elif "chill" in genre.lower() or "lofi" in genre.lower():
-            gain_map = {
-                "drums": 0.58, "kick": 0.60,
-                "bass": 0.65,
-                "synth": 0.62, "arp": 0.58,
-                "pad": 0.40,
-                "texture": 0.22,
-            }
-        else:
-            # Electronic
-            gain_map = {
-                "kick": 0.88,
-                "bass": 0.72,
-                "drums": 0.68,
-                "synth": 0.52, "arp": 0.48,
-                "pad": 0.42, "chords": 0.45,
-                "piano": 0.50,
-                "texture": 0.18,
-            }
+        # ✅ CLUB FIX: Kick and Bass < 120Hz = MONO
+        if st in ("kick", "bass"):
+            audio = _mono_below(audio, cutoff_hz=120.0)
         
+        # Gain Staging
+        gain_map = {
+            "kick": 0.90,
+            "bass": 0.75,
+            "drums": 0.70,
+            "synth": 0.55,
+            "arp": 0.50,
+            "pad": 0.45,
+            "piano": 0.55,
+            "texture": 0.15,
+        }
+        
+        # Adjust gain map for lighter genres
+        if "jazz" in genre.lower() or "chill" in genre.lower():
+            gain_map["kick"] = 0.65
+            gain_map["piano"] = 0.80
+            
         gain = gain_map.get(st, 0.50)
         audio = audio * float(gain)
-        
-        processed.append(audio.astype(np.float32, copy=False))
+        processed.append(audio)
     
     # Sum stems
     mix = np.sum(processed, axis=0).astype(np.float32)
     
     # =========================================================================
-    # SMART MIXER EFFECTS
+    # SMART MIXER (TONE SHAPING)
     # =========================================================================
     if synth_params:
-        # Drive/Saturation
+        # Drive (Saturation)
         drive_amt = float(synth_params.get("drive", 0.0))
         if drive_amt > 0.05:
-            mix = apply_overdrive(mix, drive=drive_amt * 4.0)
+            mix = apply_overdrive(mix, drive=drive_amt * 3.2)
         
-        # Filter Cutoff/Resonance
+        # Filter (Cutoff)
         cutoff_amt = float(synth_params.get("cutoff", 1.0))
         resonance_amt = float(synth_params.get("resonance", 0.0))
         
+        # ✅ SMART FILTER: Don't kill the kick! 
+        # Only filter mids/highs when cutoff is lowered.
         if cutoff_amt < 0.98:
-            cutoff_freq = 100.0 + (20000.0 * (cutoff_amt ** 2))
+            cutoff_freq = 600.0 + (18000.0 * (cutoff_amt ** 2))
+            
+            # Split mix
+            low_end = apply_lowpass(mix, 200.0)
+            mid_high = mix - low_end
             
             if resonance_amt > 0.1:
-                mix = apply_resonant_filter(
-                    mix,
-                    cutoff=cutoff_freq,
-                    resonance=resonance_amt * 0.9
-                )
+                mid_high = apply_resonant_filter(mid_high, cutoff=cutoff_freq, resonance=resonance_amt * 0.6)
             else:
-                mix = apply_lowpass(mix, cutoff=cutoff_freq)
+                mid_high = apply_lowpass(mid_high, cutoff=cutoff_freq)
+            
+            mix = low_end + mid_high
         
-        # Space/Reverb
+        # Air Boost for electronic genres (Prevents dullness)
+        gl = genre.lower()
+        if any(x in gl for x in ["house", "techno", "trance", "edm", "dance"]):
+            mix = apply_parametric_eq(mix, 9500, gain_db=0.6, q=0.7)
+
+        # Reverb
         space_amt = float(synth_params.get("space", 0.0))
         if space_amt > 0.05:
             room_size = 0.3 + (space_amt * 0.6)
             wet_amount = space_amt * 0.5
-            mix = apply_algorithmic_reverb(
-                mix,
-                room_size=room_size,
-                wet=wet_amount
-            )
+            mix = apply_algorithmic_reverb(mix, room_size=room_size, wet=wet_amount)
     
-    # Master chain
+    # ✅ Final Mono-Low Integrity
+    mix = _mono_below(mix, cutoff_hz=120.0)
+    
+    # Master
     mix = master_chain(mix, genre=genre)
     
     # Save
     output_wav.parent.mkdir(parents=True, exist_ok=True)
-    wavfile.write(str(output_wav), SAMPLE_RATE, (mix * 32767.0).astype(np.int16))
+    _write_wav(output_wav, mix)
     print(f"✅ Mixed: {output_wav.name}")
 
 # =============================================================================
-# SCHEMA COMPATIBILITY
+# SCHEMA COMPATIBILITY HELPERS
 # =============================================================================
 
 def _coerce_enabled_layers(preset: dict) -> List[str]:
     layers = preset.get("layers")
     if isinstance(layers, dict):
         enabled = layers.get("enabled", [])
-        if isinstance(enabled, list):
-            return [str(x) for x in enabled]
-    
-    if isinstance(layers, list):
-        return [str(x) for x in layers]
-    
+        if isinstance(enabled, list): return [str(x) for x in enabled]
+    if isinstance(layers, list): return [str(x) for x in layers]
     music_cfg = preset.get("music", {})
     ml = music_cfg.get("layers")
-    if isinstance(ml, list):
-        return [str(x) for x in ml]
-    
+    if isinstance(ml, list): return [str(x) for x in ml]
     return ["drums", "bass", "music"]
 
 def _get_genre(preset: dict) -> str:
     music_cfg = preset.get("music", {})
-    genre = music_cfg.get("genre") or preset.get("genre") or "Techno"
-    return str(genre)
+    return str(music_cfg.get("genre") or preset.get("genre") or "Techno")
 
 def _get_bpm(preset: dict) -> int:
     music_cfg = preset.get("music", {})
-    bpm = music_cfg.get("bpm") or preset.get("bpm") or 128
-    try:
-        return int(bpm)
-    except Exception:
-        return 128
+    try: return int(music_cfg.get("bpm") or preset.get("bpm") or 128)
+    except: return 128
 
 def _get_key(preset: dict) -> str:
     music_cfg = preset.get("music", {})
-    k = music_cfg.get("key") or preset.get("key") or "A"
-    return str(k)
+    return str(music_cfg.get("key") or preset.get("key") or "A")
 
 def _get_variation(preset: dict) -> float:
-    v = preset.get("variation", 0.25)
-    try:
-        return float(v)
-    except Exception:
-        return 0.25
+    try: return float(preset.get("variation", 0.25))
+    except: return 0.25
 
 def _get_target_lufs(preset: dict) -> float:
     master_cfg = preset.get("master", {})
     if isinstance(master_cfg, dict) and "target_lufs" in master_cfg:
         return float(master_cfg["target_lufs"])
-    mix_cfg = preset.get("mix", {})
-    if isinstance(mix_cfg, dict) and "target_lufs" in mix_cfg:
-        return float(mix_cfg["target_lufs"])
     return -14.0
 
 def _get_synth_params(preset: dict) -> Optional[dict]:
-    # API schema
     mixer_cfg = preset.get("mixer", {})
     if isinstance(mixer_cfg, dict):
         sp = mixer_cfg.get("synth")
@@ -521,43 +468,24 @@ def _get_synth_params(preset: dict) -> Optional[dict]:
                 "drive": float(sp.get("drive", 0.0)) / 100.0,
                 "space": float(sp.get("space", 0.0)) / 100.0,
             }
-    
-    # Recipe schema
-    sm = preset.get("smart_mixer", {})
-    if isinstance(sm, dict):
-        sp = sm.get("synth")
-        if isinstance(sp, dict):
-            return sp
-    
     return None
 
 def _get_focus_mode(preset: dict) -> str:
     focus_cfg = preset.get("focus", {})
-    if isinstance(focus_cfg, dict) and "binaural_mode" in focus_cfg:
-        return str(focus_cfg.get("binaural_mode", "off"))
-    
     if isinstance(focus_cfg, dict) and "mode" in focus_cfg:
         return str(focus_cfg.get("mode", "off"))
-    
     return "off"
 
 def _get_engine_mode(preset: dict) -> str:
     m = preset.get("mode")
-    if isinstance(m, str) and m in ("music", "focus", "hybrid"):
-        return m
-    
-    fm = _get_focus_mode(preset)
-    if fm in ("focus", "relax"):
-        return "focus"
+    if isinstance(m, str) and m in ("music", "focus", "hybrid"): return m
     return "music"
 
 def _get_focus_mix(preset: dict) -> float:
     focus_cfg = preset.get("focus", {})
     if isinstance(focus_cfg, dict) and "mix" in focus_cfg:
-        try:
-            return float(focus_cfg.get("mix", 30.0)) / 100.0
-        except Exception:
-            return 0.30
+        try: return float(focus_cfg.get("mix", 30.0)) / 100.0
+        except: return 0.30
     return 0.30
 
 def _get_ambience(preset: dict) -> Dict[str, float]:
@@ -567,12 +495,9 @@ def _get_ambience(preset: dict) -> Dict[str, float]:
         amb = focus_cfg.get("ambience", {}) or {}
     
     def _norm(x: Any) -> float:
-        try:
-            v = float(x)
-        except Exception:
-            return 0.0
-        if v > 1.0:
-            v = v / 100.0
+        try: v = float(x)
+        except: return 0.0
+        if v > 1.0: v = v / 100.0
         return float(np.clip(v, 0.0, 1.0))
     
     return {
@@ -582,39 +507,14 @@ def _get_ambience(preset: dict) -> Dict[str, float]:
     }
 
 def _get_stem_length(preset: dict, default: str = "medium") -> int:
-    """
-    Get stem length in bars from preset.
-    
-    Options:
-    - "short": 8 bars (~30s)
-    - "medium": 16 bars (~1min) [DEFAULT]
-    - "long": 32 bars (~2min)
-    - "full": 64 bars (~4min)
-    """
     length = preset.get("stem_length", default)
-    if isinstance(length, int):
-        return max(1, int(length))
-    
-    length_str = str(length).lower().strip()
-    return STEM_LENGTHS.get(length_str, STEM_LENGTHS["medium"])
+    if isinstance(length, int): return max(1, int(length))
+    return STEM_LENGTHS.get(str(length).lower().strip(), STEM_LENGTHS["medium"])
 
 def _get_energy_curve(preset: dict, default: str = "peak") -> str:
-    """
-    Get energy curve type from preset.
-    
-    Options:
-    - "peak": Classic club track
-    - "drop": Bass/dubstep style
-    - "build": Progressive build
-    - "linear": Constant energy
-    """
     curve = preset.get("energy_curve", default)
     curve_str = str(curve).lower().strip()
-    
-    if curve_str in ENERGY_CURVES:
-        return curve_str
-    
-    return default
+    return curve_str if curve_str in ENERGY_CURVES else default
 
 # =============================================================================
 # PROFESSIONAL STEM RENDERING
@@ -634,16 +534,12 @@ def render_stem_for_request(
     ambience: Dict[str, float],
     bars: int = 16,
     energy_curve: str = "peak",
+    duration_sec: float,
 ) -> List[Path]:
     """
-    Render professional-quality stems (1-2 minutes) with energy dynamics.
-    
-    Args:
-        bars: Stem length in bars (8=short, 16=medium, 32=long, 64=full)
-        energy_curve: "peak", "drop", "build", or "linear"
+    Render professional-quality stems.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
-    
     layer_l = str(layer).lower().strip()
     paths: List[Path] = []
     
@@ -652,77 +548,35 @@ def render_stem_for_request(
     base_variant = 1 + (abs(hash(layer_l)) % 8)
     variant = int(base_variant + int(v * 3.0))
     
-    # Map UI/API layers to render_stem
-    if layer_l in ("kick",):
-        p = out_dir / f"{date}_{safe_id}_kick_v{variant}_b{bars}.wav"
-        render_stem(
-            out_path=p,
-            stem="kick",
-            genre=genre,
-            bpm=bpm,
-            key=key,
-            seed=seed_str,
-            variant=variant,
-            bars=bars,
-            energy_curve=energy_curve
-        )
-        paths.append(p)
-        return paths
+    stem_map = {
+        "kick": "kick",
+        "drums": "drums",
+        "bass": "bass",
+        "music": "music", "pad": "music", "synth": "music", "melody": "music", "chords": "music"
+    }
     
-    if layer_l in ("drums",):
-        p = out_dir / f"{date}_{safe_id}_drums_v{variant}_b{bars}.wav"
+    if layer_l in stem_map:
+        stem_type = stem_map[layer_l]
+        p = out_dir / f"{date}_{safe_id}_{stem_type}_v{variant}.wav"
         render_stem(
             out_path=p,
-            stem="drums",
+            stem=stem_type,
             genre=genre,
             bpm=bpm,
             key=key,
             seed=seed_str,
             variant=variant,
             bars=bars,
-            energy_curve=energy_curve
-        )
-        paths.append(p)
-        return paths
-    
-    if layer_l in ("bass",):
-        p = out_dir / f"{date}_{safe_id}_bass_v{variant}_b{bars}.wav"
-        render_stem(
-            out_path=p,
-            stem="bass",
-            genre=genre,
-            bpm=bpm,
-            key=key,
-            seed=seed_str,
-            variant=variant,
-            bars=bars,
-            energy_curve=energy_curve
-        )
-        paths.append(p)
-        return paths
-    
-    if layer_l in ("music", "pad", "synth", "melody", "chords"):
-        p = out_dir / f"{date}_{safe_id}_music_v{variant}_b{bars}.wav"
-        render_stem(
-            out_path=p,
-            stem="music",
-            genre=genre,
-            bpm=bpm,
-            key=key,
-            seed=seed_str,
-            variant=variant,
-            bars=bars,
-            energy_curve=energy_curve
+            energy_curve=energy_curve,
+            duration_sec=duration_sec # ✅ PASS DURATION TO ENGINE
         )
         paths.append(p)
         return paths
     
     if layer_l in ("texture", "ambience"):
-        # Textures are longer for natural evolution
-        texture_bars = max(bars, 16)
-        
+        # Auto-calculate texture needs
         if ambience.get("rain", 0.0) > 0.01:
-            p_r = out_dir / f"{date}_{safe_id}_texture_rain_v{variant}.wav"
+            p_r = out_dir / f"{date}_{safe_id}_texture_rain.wav"
             render_stem(
                 out_path=p_r,
                 stem="texture",
@@ -731,16 +585,18 @@ def render_stem_for_request(
                 key=key,
                 seed=seed_str,
                 variant=variant,
-                bars=texture_bars,
+                bars=bars,
+                duration_sec=duration_sec,
                 texture_type="rain",
                 energy_curve="linear"
             )
-            softened = out_dir / f"{date}_{safe_id}_texture_rain_soft_v{variant}.wav"
+            # Soften rain specifically
+            softened = out_dir / f"{date}_{safe_id}_texture_rain_soft.wav"
             soften_nature_bed(p_r, softened, gain_db=-18.0)
             paths.append(softened)
         
-        if ambience.get("vinyl", 0.0) > 0.01 or not paths:
-            p_v = out_dir / f"{date}_{safe_id}_texture_vinyl_v{variant}.wav"
+        if ambience.get("vinyl", 0.0) > 0.01:
+            p_v = out_dir / f"{date}_{safe_id}_texture_vinyl.wav"
             render_stem(
                 out_path=p_v,
                 stem="texture",
@@ -749,12 +605,13 @@ def render_stem_for_request(
                 key=key,
                 seed=seed_str,
                 variant=variant,
-                bars=texture_bars,
+                bars=bars,
+                duration_sec=duration_sec,
                 texture_type="vinyl",
                 energy_curve="linear"
             )
             paths.append(p_v)
-        
+            
         return paths
     
     return []
@@ -763,48 +620,12 @@ def render_stem_for_request(
 # FALLBACK STEM SELECTION (Legacy)
 # =============================================================================
 
-def _fallback_choose_stems_for_layer(
-    layer: str,
-    genre: str,
-    rnd: random.Random
-) -> List[Path]:
-    """Legacy fallback - only used if render_stem fails"""
+def _fallback_choose_stems_for_layer(layer: str, genre: str, rnd: random.Random) -> List[Path]:
     g = genre.lower()
-    
     if layer == "drums":
-        if "house" in g:
-            p = get_random_variant("drums_house", rnd)
-            return [p] if p else []
-        if "lofi" in g or "chill" in g:
-            p = get_random_variant("drums_lofi", rnd)
-            return [p] if p else []
-        p = get_random_variant("kick_techno", rnd)
-        return [p] if p else []
-    
+        return [get_random_variant("drums_house" if "house" in g else "kick_techno", rnd)]
     if layer == "bass":
-        if "house" in g:
-            p = get_random_variant("bass_deep", rnd)
-            return [p] if p else []
-        if "bass" in g:
-            p = get_random_variant("bass_wobble", rnd)
-            return [p] if p else []
-        p = get_random_variant("bass_techno", rnd)
-        return [p] if p else []
-    
-    if layer in ("music", "pad", "synth"):
-        if "house" in g:
-            p = get_random_variant("chords_house", rnd)
-            return [p] if p else []
-        if "lofi" in g or "chill" in g:
-            p = get_random_variant("keys_lofi", rnd)
-            return [p] if p else []
-        p = get_random_variant("arp_techno", rnd)
-        return [p] if p else []
-    
-    if layer in ("texture", "ambience"):
-        p = get_random_variant("texture_vinyl", rnd)
-        return [p] if p else []
-    
+        return [get_random_variant("bass_deep" if "house" in g else "bass_techno", rnd)]
     return []
 
 # =============================================================================
@@ -819,13 +640,10 @@ def build_track(date: str, preset: dict, total_sec: int) -> Tuple[Path, dict]:
     TMP.mkdir(parents=True, exist_ok=True)
     OUT.mkdir(parents=True, exist_ok=True)
     
-    # Optional fallback library
     ensure_procedural_library(date)
     
     preset_id = str(preset.get("id", "custom"))
     safe_id = safe_slug(preset_id)
-    
-    # Deterministic seed
     seed_str = str(preset.get("seed") or f"{date}:{preset_id}")
     
     # Extract parameters
@@ -841,24 +659,16 @@ def build_track(date: str, preset: dict, total_sec: int) -> Tuple[Path, dict]:
     focus_mix = _get_focus_mix(preset)
     ambience = _get_ambience(preset)
     
-    # NEW: Professional features
     stem_length_bars = _get_stem_length(preset, default="medium")
     energy_curve = _get_energy_curve(preset, default="peak")
-    
-    channels = int(preset.get("channels", 2))
-    channels = 2 if channels not in (1, 2) else channels
-    
     enabled_layers = _coerce_enabled_layers(preset)
     
-    # Fallback RNG
     rnd = random.Random(seed_str + ":fallback")
-    
     rendered_dir = TMP / "rendered" / safe_id
     
     print("=" * 70)
     print(f"🎵 Building: {preset.get('title', preset_id)}")
-    print(f"   Genre: {genre} | BPM: {bpm} | Key: {key}")
-    print(f"   Stem Length: {stem_length_bars} bars")
+    print(f"   Genre: {genre} | BPM: {bpm} | Key: {key} | Duration: {total_sec}s")
     print(f"   Energy Curve: {energy_curve}")
     print(f"   Layers: {', '.join(enabled_layers)}")
     print("=" * 70)
@@ -868,10 +678,8 @@ def build_track(date: str, preset: dict, total_sec: int) -> Tuple[Path, dict]:
     # -------------------------------------------------------------------------
     focus_audio_path: Optional[Path] = None
     if engine_mode in ("focus", "hybrid") and focus_mode in ("focus", "relax"):
-        if focus_mode == "focus":
-            base_freq, beat_freq = 250.0, 20.0
-        else:
-            base_freq, beat_freq = 150.0, 6.0
+        base_freq = 250.0 if focus_mode == "focus" else 150.0
+        beat_freq = 20.0 if focus_mode == "focus" else 6.0
         
         focus_wav = TMP / f"{date}_{safe_id}_focus.wav"
         generate_focus_session(
@@ -889,23 +697,13 @@ def build_track(date: str, preset: dict, total_sec: int) -> Tuple[Path, dict]:
             ffmpeg_loudnorm(focus_wav, normed, target_lufs=target_lufs)
             ffmpeg_encode_mp3(normed, mp3, bitrate="320k")
             assert_audio_not_empty(mp3)
-            
-            entry = {
+            return mp3, {
                 "id": f"free-{date}-{preset_id}",
                 "title": preset.get("title", f"Focus Session ({focus_mode})"),
-                "tier": "free",
-                "date": date,
-                "category": "focus",
                 "durationSec": total_sec,
-                "url": None,
                 "genre": genre,
-                "bpm": bpm,
                 "mode": "focus",
-                "focus_mode": focus_mode,
-                "layers": [],
-                "seed": seed_str,
             }
-            return mp3, entry
     
     # -------------------------------------------------------------------------
     # 2) MUSIC STEM RENDER (PROFESSIONAL)
@@ -920,7 +718,7 @@ def build_track(date: str, preset: dict, total_sec: int) -> Tuple[Path, dict]:
     
     for layer in layers_to_render:
         try:
-            print(f"   🎛️  Rendering {layer} ({stem_length_bars} bars, {energy_curve} curve)...")
+            print(f"   🎛️  Rendering {layer}...")
             selected.extend(
                 render_stem_for_request(
                     out_dir=rendered_dir,
@@ -935,69 +733,77 @@ def build_track(date: str, preset: dict, total_sec: int) -> Tuple[Path, dict]:
                     ambience=ambience,
                     bars=stem_length_bars,
                     energy_curve=energy_curve,
+                    duration_sec=total_sec # ✅ Ensure stems match track duration
                 )
             )
         except Exception as e:
             print(f"   ⚠️  Render failed for {layer}: {e}")
-            print(f"   ⚠️  Using fallback stems...")
             selected.extend(_fallback_choose_stems_for_layer(str(layer), genre, rnd))
     
     # Dedup
     dedup: List[Path] = []
     seen = set()
     for s in selected:
-        if not s:
-            continue
-        try:
-            keyp = str(s.resolve())
-        except Exception:
-            keyp = str(s)
-        if keyp in seen:
-            continue
+        if not s: continue
+        keyp = str(s)
+        if keyp in seen: continue
         seen.add(keyp)
         dedup.append(s)
     selected = dedup
     
     if not selected:
-        fb = get_random_variant("kick_techno", rnd) or get_random_variant("drums_lofi", rnd)
-        if fb:
-            selected = [fb]
-        else:
-            raise RuntimeError("No stems available")
-    
-    print(f"   ✅ Generated {len(selected)} stems")
+        raise RuntimeError("No stems available")
     
     # -------------------------------------------------------------------------
-    # 3) NO LOOPING NEEDED (Stems are already full length)
+    # 3) SMART LOOP STEMS (STEREO PRESERVED)
     # -------------------------------------------------------------------------
-    # Since stems are now 16-64 bars (1-4 minutes), we don't need to loop them
-    # We'll just trim/pad to exact duration if needed
-    
+    print(f"   🔄 Looping stems to {total_sec}s with crossfades...")
     loops: List[Path] = []
+    
     for i, stem in enumerate(selected):
-        # Read stem
-        rate, data = wavfile.read(str(stem))
-        if data.dtype == np.int16:
-            data = data.astype(np.float32) / 32768.0
-        if data.ndim > 1:
-            data = data[:, 0]
+        if not stem or not stem.exists(): continue
+        out_wav = TMP / f"{date}_{safe_id}_{i}_loop.wav"
         
-        target_samples = int(total_sec * SAMPLE_RATE)
-        
-        if len(data) < target_samples:
-            # Pad if too short
-            data = np.pad(data, (0, target_samples - len(data)))
-        else:
-            # Trim if too long
-            data = data[:target_samples]
-        
-        # Save trimmed/padded stem
-        out_wav = TMP / f"{date}_{safe_id}_{i}_fitted.wav"
-        wavfile.write(str(out_wav), SAMPLE_RATE, (data * 32767.0).astype(np.int16))
-        loops.append(out_wav)
+        try:
+            data = _safe_read_wav(stem) # (N, 2)
+            target_samples = int(total_sec * SAMPLE_RATE)
+            
+            if data.shape[0] >= target_samples:
+                final = data[:target_samples, :]
+            else:
+                crossfade_samples = int(0.05 * SAMPLE_RATE)
+                if data.shape[0] <= crossfade_samples * 2: crossfade_samples = 0
+                num_loops = int(np.ceil(target_samples / data.shape[0])) + 1
+                
+                looped = []
+                for loop_idx in range(num_loops):
+                    if loop_idx == 0:
+                        looped.append(data)
+                    else:
+                        if crossfade_samples > 0:
+                            fade_out = np.linspace(1, 0, crossfade_samples)
+                            fade_in = np.linspace(0, 1, crossfade_samples)
+                            prev_end = looped[-1][-crossfade_samples:, :]
+                            curr_start = data[:crossfade_samples, :]
+                            # Stereo Crossfade
+                            crossfaded = prev_end * fade_out[:, None] + curr_start * fade_in[:, None]
+                            looped[-1] = looped[-1][:-crossfade_samples, :]
+                            looped.append(np.concatenate([crossfaded, data[crossfade_samples:, :]], axis=0))
+                        else:
+                            looped.append(data)
+                
+                final = np.concatenate(looped, axis=0)[:target_samples, :]
+            
+            _write_wav(out_wav, final)
+            loops.append(out_wav)
+            
+        except Exception as e:
+            print(f"   ⚠️  Looping error: {e}, falling back to ffmpeg")
+            ffmpeg_loop_to_duration(stem, out_wav, total_sec)
+            loops.append(out_wav)
     
     # -------------------------------------------------------------------------
-    # 4) PROFESSIONAL MIXDOWN
+    # 4) PROFESSIONAL MIXDOWN (STEREO)
     # -------------------------------------------------------------------------
     print(f"   🎚️  Mixing with professional chain...")
     mixed_wav = TMP / f"{date}_{safe_id}_mixed.wav"
@@ -1013,38 +819,25 @@ def build_track(date: str, preset: dict, total_sec: int) -> Tuple[Path, dict]:
     normed = TMP / f"{date}_{safe_id}_norm.wav"
     ffmpeg_loudnorm(faded, normed, target_lufs=target_lufs)
     
+    final_wav = normed
+    
     # -------------------------------------------------------------------------
     # 6) HYBRID BLEND (Optional)
     # -------------------------------------------------------------------------
     if engine_mode == "hybrid" and focus_audio_path is not None:
-        print(f"   🔀 Blending with focus session ({int(focus_mix*100)}% focus)...")
         hybrid_wav = TMP / f"{date}_{safe_id}_hybrid.wav"
-        
         fm = float(np.clip(focus_mix, 0.0, 1.0))
         mm = 1.0 - fm
-        
-        af = (
-            f"[0:a]volume={mm}[m];"
-            f"[1:a]volume={fm}[f];"
-            f"[m][f]amix=inputs=2:normalize=0:dropout_transition=0"
-        )
-        cmd = [
-            "ffmpeg", "-y",
-            "-i", str(normed),
-            "-i", str(focus_audio_path),
-            "-filter_complex", af,
-            str(hybrid_wav),
-        ]
+        af = f"[0:a]volume={mm}[m];[1:a]volume={fm}[f];[m][f]amix=inputs=2:normalize=0:dropout_transition=0"
+        cmd = ["ffmpeg", "-y", "-i", str(normed), "-i", str(focus_audio_path), "-filter_complex", af, str(hybrid_wav)]
         _run(cmd)
         
         hybrid_norm = TMP / f"{date}_{safe_id}_hybrid_norm.wav"
         ffmpeg_loudnorm(hybrid_wav, hybrid_norm, target_lufs=target_lufs)
         final_wav = hybrid_norm
-    else:
-        final_wav = normed
     
     # -------------------------------------------------------------------------
-    # 7) EXPORT MP3 (320kbps for professional quality)
+    # 7) EXPORT MP3 (320kbps)
     # -------------------------------------------------------------------------
     print(f"   💿 Encoding to MP3 (320kbps)...")
     mp3 = OUT / f"free-{date}-{safe_id}.mp3"
@@ -1066,10 +859,7 @@ def build_track(date: str, preset: dict, total_sec: int) -> Tuple[Path, dict]:
         "bpm": bpm,
         "key": key,
         "mode": engine_mode,
-        "focus_mode": focus_mode,
         "layers": enabled_layers,
-        "stem_length_bars": stem_length_bars,
-        "energy_curve": energy_curve,
         "seed": seed_str,
     }
     
@@ -1081,94 +871,51 @@ def build_track(date: str, preset: dict, total_sec: int) -> Tuple[Path, dict]:
 
 def main() -> None:
     ap = argparse.ArgumentParser(
-        description="SoundFlow Professional DJ Engine v6.0",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  Generate daily tracks:
-    python remix_daily.py --date 2025-12-20 --duration-sec 180
-  
-  Generate from JSON recipe:
-    python remix_daily.py --date 2025-12-20 --json recipe.json
-  
-  Generate and upload:
-    python remix_daily.py --date 2025-12-20 --upload
-
-Features:
-  - Long stems (16-64 bars / 1-4 minutes)
-  - Energy curves (peak/drop/build/linear)
-  - Professional 3-layer kicks
-  - Dynamic arrangement
-  - Broadcast-quality mixing
-        """
+        description="SoundFlow Professional DJ Engine v6.1 (Stereo)",
     )
     ap.add_argument("--date", required=True, help="Generation date (YYYY-MM-DD)")
-    ap.add_argument("--duration-sec", type=int, default=180, help="Track duration in seconds (default: 180)")
+    ap.add_argument("--duration-sec", type=int, default=180, help="Track duration in seconds")
     ap.add_argument("--upload", action="store_true", help="Upload to R2 storage")
     ap.add_argument("--json", type=str, help="JSON recipe file")
     
     args = ap.parse_args()
-    
     bucket = os.environ.get("R2_BUCKET")
     
     print("=" * 70)
-    print("🎵 SoundFlow Professional DJ Engine v6.0")
+    print("🎵 SoundFlow Professional DJ Engine v6.1")
     print("=" * 70)
-    print()
     
     if args.json:
         p = Path(args.json)
-        if not p.exists():
-            raise RuntimeError(f"JSON file not found: {args.json}")
-        
+        if not p.exists(): raise RuntimeError(f"JSON file not found: {args.json}")
         data = json.loads(p.read_text(encoding="utf-8"))
         combos = data.get("combinations", [])
-        print(f"📂 Processing {len(combos)} combinations from recipe...")
-        print()
         
         for i, combo in enumerate(combos, 1):
-            print(f"[{i}/{len(combos)}]")
             mp3, _ = build_track(args.date, combo, args.duration_sec)
-            
             if args.upload and bucket:
                 key = f"audio/free/{args.date}/{mp3.name}"
                 upload_file(mp3, bucket, key, public=True)
                 print(f"   ☁️  Uploaded to R2: {key}")
-            print()
-    
     else:
-        data = load_presets()
-        presets = data.get("presets", [])
-        
+        # Default behavior
+        presets = load_presets().get("presets", [])
         if not presets:
-            print("⚠️  No presets found in free_presets.yaml")
-            print("   Using default preset...")
             presets = [{
-                "id": "default-trance",
-                "title": "Trance Session",
-                "genre": "Trance",
+                "id": "default-house",
+                "title": "House Session",
+                "genre": "House",
                 "category": "music",
                 "stem_length": "medium",
                 "energy_curve": "peak"
             }]
         
-        print(f"🎼 Generating {len(presets)} tracks for {args.date}...")
-        print(f"⏱️  Duration: {args.duration_sec}s per track")
-        print()
-        
         for i, preset in enumerate(presets, 1):
-            print(f"[{i}/{len(presets)}]")
             mp3, _ = build_track(args.date, preset, args.duration_sec)
-            
             if args.upload and bucket:
                 key = f"audio/free/{args.date}/{mp3.name}"
                 upload_file(mp3, bucket, key, public=True)
                 print(f"   ☁️  Uploaded to R2: {key}")
-            print()
-    
-    print("=" * 70)
-    print("✅ Generation complete!")
-    print("=" * 70)
 
 if __name__ == "__main__":
     main()

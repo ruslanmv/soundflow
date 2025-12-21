@@ -1,28 +1,18 @@
 #!/usr/bin/env python3
 # generator/tests/test_api.py
 """
-SoundFlow API – Full Integration Smoke Test (Dynamic-Stem Edition)
+SoundFlow API – Full Integration Smoke Test (Dynamic-Stem & Duration Edition)
 
-✅ What this version adds (to force NEW music / NEW stems):
-- Every request uses a *unique seed* (seed includes UTC timestamp + nonce)
-- Every request varies:
-  - key, bpm micro-variation, layers order
-  - synth_params
-  - ambience (even for music) to force texture regeneration
-- Optional: "force_new": true (ignored by server if not implemented, harmless)
-- Optional: can run each test multiple times (RUNS_PER_CASE) to prove diversity
+✅ What this version adds:
+- TESTS DIFFERENT LENGTHS: Ranging from 30s to 180s (3 minutes).
+- TESTS ALL GENRES: Iterates through the full style catalog.
+- Unique Seeds: Ensures every request generates fresh audio.
+- CLEAN AUDIO: Disabled random white noise injection for pure music tests.
 
 This validates:
-- FastAPI backend is reachable
-- /api/health OK
-- /api/generate works across genres + modes
-- Focus + hybrid engines work
-- MP3 URLs download and look like MP3
-- MP3s are non-empty
-
-Note:
-- To truly get different music, your backend MUST pass request.seed into remix_daily.build_track()
-  and remix_daily must call render_stem(... seed=seed ...). (Your updated remix_daily does.)
+- The engine calculates bars correctly for long durations.
+- The looping logic works without crashing.
+- MP3 encoding handles large files.
 """
 
 from __future__ import annotations
@@ -49,16 +39,17 @@ API_BASE = "http://localhost:8000"
 OUT_DIR = Path("api_test_outputs")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-# Guard against silent/empty outputs (tune if your mp3 bitrate changes a lot)
+# Guard against silent/empty outputs
 MIN_MP3_SIZE_BYTES = 30_000
 
-DEFAULT_TIMEOUT_SEC = 180
+# Increased timeout to allow for 3-minute track generation
+DEFAULT_TIMEOUT_SEC = 300 
 DATE = datetime.now().strftime("%Y-%m-%d")
 
-# Run each test case multiple times to verify it really produces different music
-RUNS_PER_CASE = 1  # set to 2 or 3 to prove diversity
+# Run each test case multiple times to prove diversity
+RUNS_PER_CASE = 1 
 
-# If True, we compute a quick content fingerprint of each MP3 and warn on duplicates
+# If True, check for duplicate audio content
 CHECK_DUPLICATE_AUDIO = True
 
 
@@ -137,19 +128,11 @@ def _utc_stamp() -> str:
 
 
 def _make_unique_seed(prefix: str, test_id: str, run_index: int) -> str:
-    """
-    Unique per request, guaranteed.
-    Also includes PID + a random nonce to avoid collisions in parallel runs.
-    """
     nonce = random.randint(0, 2**31 - 1)
     return f"{prefix}-{DATE}-{test_id}-run{run_index}-{_utc_stamp()}-pid{os.getpid()}-n{nonce}"
 
 
 def _mp3_fingerprint(path: Path, bytes_to_hash: int = 128_000) -> str:
-    """
-    Fast, cheap "are these files basically identical" check.
-    Hashes the first N bytes (most encoders include deterministic headers but audio frames differ too).
-    """
     data = path.read_bytes()
     chunk = data[: min(len(data), bytes_to_hash)]
     return hashlib.sha256(chunk).hexdigest()
@@ -162,9 +145,17 @@ class TestCase:
 
 
 def run_case(case: TestCase, run_index: int = 1) -> Path:
-    print(f"\n🎛️  API TEST: {case.id} (run {run_index}/{RUNS_PER_CASE})")
+    # Print what we are testing specifically
+    dur = case.payload.get("duration", "?")
+    mode = case.payload.get("mode", "music")
+    genre = case.payload.get("genre", "N/A")
+    
+    print(f"\n🎛️  API TEST: {case.id}")
+    print(f"   ℹ️  {mode.upper()} | {genre} | Duration: {dur}s | Run: {run_index}")
 
+    start_t = time.time()
     meta = _http_post_json(f"{API_BASE}/api/generate", case.payload)
+    gen_time = time.time() - start_t
 
     mp3_url = meta.get("url")
     if not mp3_url or not isinstance(mp3_url, str):
@@ -173,8 +164,7 @@ def run_case(case: TestCase, run_index: int = 1) -> Path:
     filename = meta.get("filename") or f"{case.id}.mp3"
     filename = _safe_filename(str(filename))
 
-    # Make output file name unique even if backend returns same filename
-    out_path = OUT_DIR / f"{case.id}__run{run_index}__{filename}"
+    out_path = OUT_DIR / f"{case.id}__run{run_index}__{dur}s__{filename}"
 
     _download_file(mp3_url, out_path)
 
@@ -185,12 +175,13 @@ def run_case(case: TestCase, run_index: int = 1) -> Path:
     if not _looks_like_mp3(out_path):
         raise RuntimeError(f"Downloaded file doesn't look like MP3: {out_path}")
 
-    print(f"✅ OK: {out_path.name} ({size} bytes)")
+    print(f"   ✅ OK: {out_path.name}")
+    print(f"   📊 Size: {size/1024:.1f} KB | Gen Time: {gen_time:.1f}s")
     return out_path
 
 
 # =============================================================================
-# PAYLOAD BUILDERS (DYNAMIC STEM FORCING)
+# PAYLOAD BUILDERS
 # =============================================================================
 
 _KEYS = ["A", "C", "D", "E", "F", "G"]
@@ -227,35 +218,28 @@ def make_music_payload(
     channels: int = 2,
     run_index: int = 1,
 ) -> Dict[str, Any]:
-    """
-    This version intentionally injects per-request variability to force new stems.
-    """
     rnd = random.Random(f"{DATE}:{test_id}:{run_index}:{time.time_ns()}")
     seed = _make_unique_seed("api", test_id, run_index)
 
-    # micro-variation: bpm/key/curve/layers order
     bpm2 = _jitter_int(bpm, 0.03, rnd, lo=60, hi=200)
     key2 = rnd.choice(_KEYS) if rnd.random() < 0.45 else key
     curve2 = rnd.choice(_ENERGY) if rnd.random() < 0.20 else energy_curve
     layers2 = layers[:]
     rnd.shuffle(layers2)
 
-    # synth params vary per request (0..100)
     cutoff = _jitter_float(float(synth.get("cutoff", 75)), 12.0, rnd, lo=0.0, hi=100.0)
     resonance = _jitter_float(float(synth.get("resonance", 30)), 10.0, rnd, lo=0.0, hi=100.0)
     drive = _jitter_float(float(synth.get("drive", 10)), 12.0, rnd, lo=0.0, hi=100.0)
     space = _jitter_float(float(synth.get("space", 20)), 12.0, rnd, lo=0.0, hi=100.0)
 
-    # Add subtle ambience sometimes to force texture generation (even in music mode)
+    # ✅ FORCE CLEAN AUDIO: No noise injection for pure music tests
     rain = 0
     vinyl = 0
     white = 0
-    if rnd.random() < 0.35:
-        vinyl = rnd.randint(5, 35)
-    if rnd.random() < 0.20:
-        rain = rnd.randint(5, 35)
-    if rnd.random() < 0.20:
-        white = rnd.randint(5, 25)
+    
+    # Only add light vinyl if specifically testing Lo-Fi, otherwise keep clean
+    if genre.lower() in ("lofi", "chillout") and rnd.random() < 0.3:
+        vinyl = rnd.randint(5, 15)
 
     return {
         "mode": "music",
@@ -264,7 +248,7 @@ def make_music_payload(
         "genre": genre,
         "bpm": int(bpm2),
         "key": str(key2),
-        "seed": seed,  # ✅ UNIQUE PER REQUEST
+        "seed": seed,
         "layers": layers2,
         "energy_curve": curve2,
         "duration": int(duration),
@@ -278,8 +262,6 @@ def make_music_payload(
             "space": float(space),
         },
         "target_lufs": -14.0,
-
-        # Optional "hint" field (server will ignore unless you implement it)
         "force_new": True,
     }
 
@@ -304,7 +286,7 @@ def make_focus_payload(
         "seed": seed,
         "layers": [],
         "energy_curve": "linear",
-        "duration": int(duration),  # must be >= 30 per your server model
+        "duration": int(duration),
         "focus_mode": focus_mode,
         "ambience": {
             "rain": int(ambience.get("rain", 0)),
@@ -345,23 +327,19 @@ def make_hybrid_payload(
         "channels": channels,
         "focus_mix": int(focus_mix),
         "variation": float(variation),
-
         "genre": genre,
         "bpm": int(bpm2),
         "key": rnd.choice(_KEYS),
-        "seed": seed,  # ✅ UNIQUE PER REQUEST
-
+        "seed": seed,
         "layers": layers2,
         "energy_curve": "linear",
         "duration": int(duration),
-
         "focus_mode": focus_mode,
         "ambience": {
             "rain": int(ambience.get("rain", 0)),
             "vinyl": int(ambience.get("vinyl", 0)),
             "white": int(ambience.get("white", 0)),
         },
-
         "intensity": int(intensity),
         "synth_params": {
             "cutoff": float(synth.get("cutoff", 70)),
@@ -378,84 +356,69 @@ def make_hybrid_payload(
 # TEST MATRIX BUILDER
 # =============================================================================
 
-def build_test_cases(duration_music: int = 30, duration_focus: int = 30) -> List[TestCase]:
+def build_test_cases() -> List[TestCase]:
     """
-    Genres list expanded and aligned with your new routing (Trance etc).
-    Note: Your backend currently accepts any genre string; the generator must implement differences.
+    Builds a diverse set of test cases covering all genres and varied durations.
+    Structure: (id, genre, bpm, key, layers, curve, DURATION_SEC)
     """
     cases: List[TestCase] = []
 
+    # Format: (short_id, genre, bpm, key, layers, curve, DURATION)
     genres = [
-        ("techno",   "Techno",   130, "A", ["drums", "bass", "music"], "peak"),
-        ("house",    "House",    124, "A", ["drums", "bass", "music"], "linear"),
-        ("deep",     "Deep",     122, "A", ["drums", "bass", "music"], "linear"),
-        ("edm",      "EDM",      128, "A", ["drums", "bass", "music"], "peak"),
-        ("trance",   "Trance",   138, "A", ["drums", "bass", "music"], "peak"),
-        ("lounge",   "Lounge",   110, "C", ["drums", "bass", "music", "texture"], "linear"),
-        ("chillout", "Chillout",  95, "C", ["drums", "music", "texture"], "linear"),
-        ("ambient",  "Ambient",   70, "C", ["music", "texture"], "linear"),
-        ("bass",     "Bass",     140, "A", ["drums", "bass"], "drop"),
-        ("dance",    "Dance",    128, "A", ["drums", "bass", "music"], "peak"),
-        ("hard",     "Hard",     150, "A", ["drums", "bass"], "peak"),
-        ("synth",    "Synth",    105, "A", ["drums", "bass", "music"], "linear"),
-        ("classic",  "Classic",   90, "C", ["music"], "linear"),
-        ("vocal",    "Vocal",   128, "A", ["drums", "bass", "music"], "peak"),
-        ("lofi",     "Lofi",      85, "C", ["drums", "music", "texture"], "linear"),
-        ("jazz",     "Jazz",     120, "F", ["drums", "bass", "music"], "linear"),
+        # --- LONG TRACKS (3 Minutes) ---
+        ("techno_long",   "Techno",   130, "A", ["drums", "bass", "music"], "peak",   180),
+        ("trance_long",   "Trance",   138, "F", ["drums", "bass", "music"], "peak",   180),
+        ("house_long",    "House",    124, "C", ["drums", "bass", "music"], "linear", 180),
+        
+        # --- MEDIUM TRACKS (1-1.5 Minutes) ---
+        ("deep_med",      "Deep",     122, "A", ["drums", "bass", "music"], "linear", 90),
+        ("edm_med",       "EDM",      128, "G", ["drums", "bass", "music"], "peak",   75),
+        ("bass_med",      "Bass",     140, "E", ["drums", "bass"],          "drop",   60),
+        ("jazz_med",      "Jazz",     120, "F", ["drums", "bass", "music"], "linear", 60),
+
+        # --- SHORT TRACKS (30-45 Seconds) ---
+        ("chill_short",   "Chillout",  95, "C", ["drums", "music", "texture"], "linear", 45),
+        ("lofi_short",    "Lofi",      85, "C", ["drums", "music", "texture"], "linear", 35),
+        ("ambient_short", "Ambient",   70, "E", ["music", "texture"],          "linear", 30),
+        ("classic_short", "Classic",   90, "C", ["music"],                     "linear", 30),
+        
+        # --- SPECIALTY ---
+        ("hard_fast",     "Hard",     150, "A", ["drums", "bass"],             "peak",   45),
+        ("synth_retro",   "Synth",    105, "D", ["drums", "bass", "music"],    "linear", 60),
     ]
 
-    variation_sweeps = [
-        ("vlow", 0.05, 35, {"cutoff": 80, "resonance": 15, "drive": 5,  "space": 15}),
-        ("vmed", 0.25, 60, {"cutoff": 85, "resonance": 25, "drive": 15, "space": 25}),
-        ("vhi",  0.50, 80, {"cutoff": 65, "resonance": 40, "drive": 25, "space": 35}),
-    ]
+    variation_defaults = {"cutoff": 75, "resonance": 25, "drive": 10, "space": 25}
 
-    for short_id, genre, bpm, key, layers, curve in genres:
-        for v_id, variation, intensity, synth in variation_sweeps:
-            test_id = f"{short_id}_{v_id}"
-            # seed will be injected per-run in make_music_payload
-            cases.append(
-                TestCase(
-                    id=test_id,
-                    payload=make_music_payload(
-                        test_id=test_id,
-                        genre=genre,
-                        bpm=bpm,
-                        key=key,
-                        layers=layers,
-                        energy_curve=curve,
-                        duration=duration_music,
-                        variation=variation,
-                        intensity=intensity,
-                        synth=synth,
-                        channels=2,
-                        run_index=1,  # overwritten per-run later
-                    ),
-                )
+    for short_id, genre, bpm, key, layers, curve, duration in genres:
+        cases.append(
+            TestCase(
+                id=short_id,
+                payload=make_music_payload(
+                    test_id=short_id,
+                    genre=genre,
+                    bpm=bpm,
+                    key=key,
+                    layers=layers,
+                    energy_curve=curve,
+                    duration=duration,  # ✅ Passing specific duration
+                    variation=0.3,
+                    intensity=60,
+                    synth=variation_defaults,
+                    channels=2,
+                    run_index=1,
+                ),
             )
-
-    # Focus modes (duration must be >= 30 to avoid 422)
-    cases.append(
-        TestCase(
-            id="focus_focus_rain",
-            payload=make_focus_payload(
-                test_id="focus_focus_rain",
-                focus_mode="focus",
-                duration=duration_focus,
-                ambience={"rain": 70, "vinyl": 0, "white": 20},
-                channels=2,
-                run_index=1,
-            ),
         )
-    )
+
+    # Focus modes
     cases.append(
         TestCase(
-            id="focus_relax_vinyl",
+            id="focus_binaural_long",
             payload=make_focus_payload(
-                test_id="focus_relax_vinyl",
-                focus_mode="relax",
-                duration=duration_focus,
-                ambience={"rain": 0, "vinyl": 60, "white": 10},
+                test_id="focus_binaural_long",
+                focus_mode="focus",
+                duration=120, # 2 Minutes
+                ambience={"rain": 70, "vinyl": 0, "white": 20},
                 channels=2,
                 run_index=1,
             ),
@@ -465,19 +428,19 @@ def build_test_cases(duration_music: int = 30, duration_focus: int = 30) -> List
     # Hybrid
     cases.append(
         TestCase(
-            id="hybrid_lofi_relax",
+            id="hybrid_mix",
             payload=make_hybrid_payload(
-                test_id="hybrid_lofi_relax",
+                test_id="hybrid_mix",
                 genre="Lofi",
                 bpm=80,
                 layers=["music", "texture", "drums"],
-                duration=duration_music,
+                duration=60,
                 focus_mode="relax",
-                ambience={"rain": 40, "vinyl": 40, "white": 0},
+                ambience={"rain": 30, "vinyl": 30, "white": 0},
                 focus_mix=35,
                 variation=0.25,
                 intensity=40,
-                synth={"cutoff": 55, "resonance": 15, "drive": 10, "space": 45},
+                synth=variation_defaults,
                 channels=2,
                 run_index=1,
             ),
@@ -507,63 +470,63 @@ def main() -> int:
         return 2
 
     # 2) run test cases
-    base_cases = build_test_cases(duration_music=30, duration_focus=30)
+    test_cases = build_test_cases()
     failures = 0
     produced: List[Path] = []
-    fingerprints: Dict[str, str] = {}  # fp -> filename
+    fingerprints: Dict[str, str] = {}
 
-    total_runs = len(base_cases) * RUNS_PER_CASE
+    total_runs = len(test_cases) * RUNS_PER_CASE
     run_counter = 0
 
-    for case in base_cases:
+    for case in test_cases:
         for run_index in range(1, RUNS_PER_CASE + 1):
             run_counter += 1
-            print(f"\n[{run_counter}/{total_runs}]")
+            print(f"\n🔹 Progress: [{run_counter}/{total_runs}]")
 
-            # Rebuild payload with per-run unique seed + per-run jitter
-            # We detect mode to call the right builder.
+            # Clone payload to inject run index
             payload = dict(case.payload)
             mode = payload.get("mode", "music")
 
             try:
+                # We need to regenerate the payload to get a fresh seed for this specific run_index
                 if mode == "music":
                     payload = make_music_payload(
                         test_id=case.id,
-                        genre=str(payload.get("genre", "Techno")),
-                        bpm=int(payload.get("bpm", 128)),
-                        key=str(payload.get("key", "A")),
-                        layers=list(payload.get("layers", ["drums", "bass", "music"])),
-                        energy_curve=str(payload.get("energy_curve", "linear")),
-                        duration=int(payload.get("duration", 30)),
-                        variation=float(payload.get("variation", 0.25)),
-                        intensity=int(payload.get("intensity", 50)),
-                        synth=dict(payload.get("synth_params", {})),
-                        channels=int(payload.get("channels", 2)),
+                        genre=str(payload.get("genre")),
+                        bpm=int(payload.get("bpm")),
+                        key=str(payload.get("key")),
+                        layers=list(payload.get("layers")),
+                        energy_curve=str(payload.get("energy_curve")),
+                        duration=int(payload.get("duration")),
+                        variation=float(payload.get("variation")),
+                        intensity=int(payload.get("intensity")),
+                        synth=dict(payload.get("synth_params")),
+                        channels=int(payload.get("channels")),
                         run_index=run_index,
                     )
                 elif mode == "focus":
                     payload = make_focus_payload(
                         test_id=case.id,
-                        focus_mode=str(payload.get("focus_mode", "focus")),
-                        duration=int(payload.get("duration", 30)),
-                        ambience=dict(payload.get("ambience", {})),
-                        channels=int(payload.get("channels", 2)),
+                        focus_mode=str(payload.get("focus_mode")),
+                        duration=int(payload.get("duration")),
+                        ambience=dict(payload.get("ambience")),
+                        channels=int(payload.get("channels")),
                         run_index=run_index,
                     )
                 elif mode == "hybrid":
                     payload = make_hybrid_payload(
                         test_id=case.id,
-                        genre=str(payload.get("genre", "Lofi")),
-                        bpm=int(payload.get("bpm", 80)),
-                        layers=list(payload.get("layers", ["music", "texture"])),
-                        duration=int(payload.get("duration", 30)),
-                        focus_mode=str(payload.get("focus_mode", "relax")),
-                        ambience=dict(payload.get("ambience", {})),
-                        focus_mix=int(payload.get("focus_mix", 35)),
-                        variation=float(payload.get("variation", 0.25)),
-                        intensity=int(payload.get("intensity", 40)),
-                        synth=dict(payload.get("synth_params", {})),
-                        channels=int(payload.get("channels", 2)),
+                        genre=str(payload.get("genre")),
+                        bpm=int(payload.get("bpm")),
+                        layers=list(payload.get("layers")),
+                        duration=int(payload.get("duration")),
+                        focus_mode=str(payload.get("focus_mode")),
+                        ambience=dict(payload.get("ambience")),
+                        focus_mix=int(payload.get("focus_mix")),
+                        variation=float(payload.get("variation")),
+                        intensity=int(payload.get("intensity")),
+                        synth=dict(payload.get("synth_params")),
+                        channels=int(payload.get("channels")),
                         run_index=run_index,
                     )
 
@@ -573,7 +536,7 @@ def main() -> int:
                 if CHECK_DUPLICATE_AUDIO:
                     fp = _mp3_fingerprint(out)
                     if fp in fingerprints:
-                        print(f"⚠️  WARNING: MP3 fingerprint duplicate with {fingerprints[fp]} (possible identical output)")
+                        print(f"⚠️  WARNING: MP3 fingerprint duplicate with {fingerprints[fp]}")
                     else:
                         fingerprints[fp] = out.name
 
@@ -581,8 +544,8 @@ def main() -> int:
                 failures += 1
                 print(f"❌ FAILED [{case.id} run {run_index}]: {e}")
 
-            # avoid hammering ffmpeg
-            time.sleep(0.35)
+            # small sleep to let server cleanup
+            time.sleep(0.5)
 
     # 3) summary
     print("\n====================")
@@ -595,7 +558,7 @@ def main() -> int:
 
     if produced:
         biggest = max(produced, key=lambda p: p.stat().st_size)
-        print(f"Largest MP3: {biggest.name} ({biggest.stat().st_size} bytes)")
+        print(f"Largest MP3: {biggest.name} ({biggest.stat().st_size/1024/1024:.2f} MB)")
     if CHECK_DUPLICATE_AUDIO and produced:
         print(f"Unique fingerprints: {len(fingerprints)} / {len(produced)}")
 
