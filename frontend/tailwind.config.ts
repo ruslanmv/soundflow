@@ -1,7 +1,7 @@
 import type { Config } from "tailwindcss";
 
 const config: Config = {
-  content: ["./app/**/*.{js,ts,jsx,tsx,mdx}", "./components/**/*.{js,ts,jsx,tsx,mdx}", "./lib/**/*.{js,ts,jsx,tsx,mdx}"],
+  content: ["./app/**/*.{ts,tsx}", "./lib/**/*.{ts,tsx}"],
   theme: {
     extend: {
       colors: {
@@ -10,12 +10,25 @@ const config: Config = {
         purple: { 400: "#c084fc", 500: "#a855f7" },
         blue: { 400: "#60a5fa", 500: "#3b82f6" }
       },
-      fontFamily: { sans: ["Inter", "system-ui", "sans-serif"] },
-      animation: { "pulse-slow": "pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite", wave: "wave 1.5s ease-in-out infinite" },
-      keyframes: { wave: { "0%, 100%": { transform: "scaleY(0.4)" }, "50%": { transform: "scaleY(1)" } } },
-      backdropBlur: { xs: "2px" }
+      fontFamily: {
+        sans: ["Inter", "system-ui", "sans-serif"]
+      },
+      animation: {
+        "pulse-slow": "pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite",
+        wave: "wave 1.5s ease-in-out infinite"
+      },
+      keyframes: {
+        wave: {
+          "0%, 100%": { transform: "scaleY(0.4)" },
+          "50%": { transform: "scaleY(1)" }
+        }
+      },
+      backdropBlur: {
+        xs: "2px"
+      }
     }
   },
   plugins: []
 };
+
 export default config;

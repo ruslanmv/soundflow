@@ -1,0 +1,36 @@
+name: Premium Buffer Publisher
+
+on:
+  schedule:
+    - cron: "20 2 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  buffer-premium:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_REGION: ${{ secrets.R2_REGION }}
+      CATALOG_PREMIUM_KEY: ${{ secrets.CATALOG_PREMIUM_KEY }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv + deps
+        run: |
+          pip install -U uv
+          cd generator && uv sync
+
+      - name: Ensure today premium exists (buffer)
+        run: |
+          TODAY=$(date -u +"%Y-%m-%d")
+          cd generator
+          uv run python -m common.buffer_publisher --date "$TODAY"

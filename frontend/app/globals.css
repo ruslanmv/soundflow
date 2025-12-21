@@ -1,56 +1,247 @@
+/* frontend/app/globals.css */
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-:root { color-scheme: dark; }
+:root {
+  color-scheme: dark;
+
+  /* Futuristic tokens */
+  --bg: #09090b; /* zinc-950 */
+  --panel: rgba(255, 255, 255, 0.06);
+  --panel-2: rgba(255, 255, 255, 0.09);
+  --border: rgba(255, 255, 255, 0.12);
+  --border-2: rgba(255, 255, 255, 0.18);
+  --text: #ffffff;
+  --muted: rgba(255, 255, 255, 0.72);
+  --muted-2: rgba(255, 255, 255, 0.55);
+
+  --teal: #2dd4bf;
+  --blue: #60a5fa;
+  --purple: #c084fc;
+}
+
+html,
+body {
+  height: 100%;
+}
 
 body {
   font-family: "Inter", system-ui, -apple-system, sans-serif;
-  background-color: #09090b;
-  color: white;
+  background-color: var(--bg);
+  color: var(--text);
+  overflow-x: hidden;
 }
 
-.glass_old {
-  background: rgba(255, 255, 255, 0.05);
-  backdrop-filter: blur(10px);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-}
+/* =========================================
+   Solid "glass" replacements (NOT translucent)
+   ========================================= */
 
+/* Use this for headers / players / cards */
 .glass {
-  background: rgba(12, 12, 16, 0.75); /* solid dark base */
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: #0b0b10; /* solid */
+  border: 1px solid var(--border);
+  box-shadow:
+    0 10px 30px rgba(0, 0, 0, 0.55),
+    0 0 0 1px rgba(255, 255, 255, 0.04) inset;
 }
 
-
-/* globals.css */
-.glass-modal {
-  background: rgba(9, 9, 11, 0.88); /* zinc-950 but opaque */
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
-  border: 1px solid rgba(255, 255, 255, 0.14);
+/* Use this for modals/panels that must be super readable */
+.glass-strong {
+  background: #0a0a0f; /* solid */
+  border: 1px solid var(--border-2);
+  box-shadow:
+    0 18px 60px rgba(0, 0, 0, 0.65),
+    0 0 0 1px rgba(255, 255, 255, 0.06) inset;
 }
 
+/* Optional: solid gradient panel background */
+.gradient-bg {
+  background: radial-gradient(1200px 600px at 20% 10%, rgba(45, 212, 191, 0.10), transparent 60%),
+    radial-gradient(900px 500px at 80% 20%, rgba(192, 132, 252, 0.10), transparent 55%),
+    radial-gradient(900px 500px at 55% 90%, rgba(96, 165, 250, 0.10), transparent 55%),
+    #09090b;
+}
 
+/* Gradient text */
 .gradient-text {
-  background: linear-gradient(135deg, #2dd4bf 0%, #a855f7 50%, #3b82f6 100%);
+  background: linear-gradient(135deg, var(--teal) 0%, var(--purple) 50%, var(--blue) 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
 }
 
-.gradient-bg {
-  background: linear-gradient(135deg, rgba(20, 184, 166, 0.1) 0%, rgba(168, 85, 247, 0.1) 50%, rgba(59, 130, 246, 0.1) 100%);
+/* =========================================
+   Futuristic animations (subtle, production-safe)
+   ========================================= */
+
+/* Soft neon "breathing" ring */
+@keyframes glowPulse {
+  0% {
+    box-shadow:
+      0 0 0 0 rgba(45, 212, 191, 0.0),
+      0 0 0 1px rgba(255, 255, 255, 0.06) inset;
+  }
+  50% {
+    box-shadow:
+      0 0 28px rgba(45, 212, 191, 0.18),
+      0 0 0 1px rgba(255, 255, 255, 0.08) inset;
+  }
+  100% {
+    box-shadow:
+      0 0 0 0 rgba(45, 212, 191, 0.0),
+      0 0 0 1px rgba(255, 255, 255, 0.06) inset;
+  }
 }
 
-@keyframes wave {
-  0%, 100% { transform: scaleY(0.4); }
-  50% { transform: scaleY(1); }
+/* Shimmer sweep (for premium buttons/badges) */
+@keyframes shimmer {
+  0% {
+    transform: translateX(-120%) skewX(-18deg);
+    opacity: 0;
+  }
+  15% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 0.15;
+  }
+  100% {
+    transform: translateX(120%) skewX(-18deg);
+    opacity: 0;
+  }
 }
+
+/* Ambient background drift */
+@keyframes floaty {
+  0% {
+    transform: translate3d(0, 0, 0);
+    opacity: 0.65;
+  }
+  50% {
+    transform: translate3d(0, -12px, 0);
+    opacity: 0.9;
+  }
+  100% {
+    transform: translate3d(0, 0, 0);
+    opacity: 0.65;
+  }
+}
+
+/* Waveform animation */
+@keyframes wave {
+  0%,
+  100% {
+    transform: scaleY(0.35);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+/* =========================================
+   Utility classes you can use in TSX
+   ========================================= */
 
 .waveform-bar {
   animation: wave 1.5s ease-in-out infinite;
   animation-delay: calc(var(--i) * 0.1s);
   animation-play-state: paused;
+  transform-origin: bottom;
 }
+
+/* Add className="neon-pulse" to panels/cards */
+.neon-pulse {
+  animation: glowPulse 3.2s ease-in-out infinite;
+}
+
+/* Add className="shimmer" to a wrapper with position:relative */
+.shimmer {
+  position: relative;
+  overflow: hidden;
+}
+.shimmer::after {
+  content: "";
+  position: absolute;
+  inset: -30%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.18),
+    transparent
+  );
+  filter: blur(2px);
+  animation: shimmer 2.8s ease-in-out infinite;
+  pointer-events: none;
+}
+
+/* Ambient floating blobs for hero backgrounds */
+.ambient-orb {
+  position: absolute;
+  border-radius: 9999px;
+  filter: blur(34px);
+  opacity: 0.55;
+  animation: floaty 7s ease-in-out infinite;
+  pointer-events: none;
+}
+
+/* Text + selection polish */
+::selection {
+  background: rgba(45, 212, 191, 0.28);
+}
+
+.text-muted {
+  color: var(--muted);
+}
+.text-muted-2 {
+  color: var(--muted-2);
+}
+
+/* Accessibility: reduce motion */
+@media (prefers-reduced-motion: reduce) {
+  .neon-pulse,
+  .shimmer::after,
+  .ambient-orb,
+  .waveform-bar {
+    animation: none !important;
+  }
+}
+/* Slight translucency ONLY for the bottom player bar (no blur) */
+.player-bar-old {
+  background: rgba(10, 10, 15, 0.92); /* tiny translucency */
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow:
+    0 -12px 40px rgba(0, 0, 0, 0.55),
+    0 0 0 1px rgba(255, 255, 255, 0.04) inset;
+}
+
+/* Bottom player bar: slight translucency + Gaussian-like backdrop blur */
+.player-bar {
+  background: rgba(10, 10, 15, 0.86);          /* slightly more transparent for blur to show */
+  -webkit-backdrop-filter: blur(14px) saturate(140%);
+  backdrop-filter: blur(14px) saturate(140%);
+
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+
+  box-shadow:
+    0 -12px 40px rgba(0, 0, 0, 0.55),
+    0 0 0 1px rgba(255, 255, 255, 0.05) inset;
+}
+
+/* Optional: add a subtle highlight gradient for a premium “glass” feel */
+.player-bar::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.06) 0%,
+    rgba(255, 255, 255, 0.02) 35%,
+    rgba(0, 0, 0, 0.00) 100%
+  );
+}
+
+
+

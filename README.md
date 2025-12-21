@@ -8,11 +8,11 @@
 
 <div align="center">
 
-# 🎧 SoundFlow AI  
+# 🎧 SoundFlow AI
 ### Intelligent Focus & Sound Session Platform
 
-🚀 **Enterprise-ready AI-powered focus sessions**  
-🎯 Designed for deep work, coding, and reading  
+🚀 **Enterprise-ready AI-powered focus sessions**
+🎯 Designed for deep work, coding, and reading
 🌐 Scalable monorepo architecture
 
 ---
@@ -33,9 +33,7 @@
 
 ## 📌 Overview
 
-
-
-**SoundFlow AI** is a modern, enterprise-grade platform that generates intelligent sound-based focus sessions using AI.  
+**SoundFlow AI** is a modern, enterprise-grade platform that generates intelligent sound-based focus sessions using AI.
 It is designed with scalability, clean architecture, and cloud deployment in mind.
 
 This repository follows a **monorepo strategy** with independent frontend and backend services.
@@ -44,94 +42,75 @@ This repository follows a **monorepo strategy** with independent frontend and ba
 
 ## 🧱 Monorepo Structure
 
-```text
+\`\`\`text
 SoundFlow-AI/
 ├── frontend/   # Next.js App Router (Vercel-ready)
 ├── backend/    # FastAPI (uv + pyproject.toml)
 └── Makefile    # Unified developer commands
-````
+\`\`\`
 
-| Layer       | Technology                | Purpose                        |
-| ----------- | ------------------------- | ------------------------------ |
-| 🎨 Frontend | Next.js (App Router)      | UI, AI Session Builder         |
-| ⚙️ Backend  | FastAPI + Python          | AI logic & sound orchestration |
-| ☁️ Deploy   | Vercel / Render / Railway | Cloud-native scaling           |
-
----
+| Layer | Technology | Purpose |
+| :--- | :--- | :--- |
+| 🎨 Frontend | Next.js (App Router) | UI, AI Session Builder |
+| ⚙️ Backend | FastAPI + Python | AI logic & sound orchestration |
+| ☁️ Deploy | Vercel / Render / Railway | Cloud-native scaling |
 
 ## ⚡ Quickstart
 
 ### 🔧 Install All Dependencies
-
-```bash
+\`\`\`bash
 make install
-```
-
----
+\`\`\`
 
 ### ▶️ Run Locally (Development)
 
-#### Terminal 1 — Backend
-
-```bash
+**Terminal 1 — Backend**
+\`\`\`bash
 make serve-backend
-```
+\`\`\`
 
-#### Terminal 2 — Frontend
-
-```bash
+**Terminal 2 — Frontend**
+\`\`\`bash
 make serve-frontend
-```
-
----
+\`\`\`
 
 ### 🌍 Local URLs
 
-| Service  | URL                                            |
-| -------- | ---------------------------------------------- |
-| Frontend | [http://localhost:3000](http://localhost:3000) |
-| Backend  | [http://localhost:8000](http://localhost:8000) |
-
----
+| Service | URL |
+| :--- | :--- |
+| Frontend | http://localhost:3000 |
+| Backend | http://localhost:8000 |
 
 ## 🚀 Deployment Guide
 
 ### 🌐 Frontend (Vercel)
-
-1. Push this repository to **GitHub**
-2. Open **Vercel Dashboard**
+1. Push this repository to GitHub
+2. Open Vercel Dashboard
 3. Import the repository
-4. Set **Root Directory** → `frontend`
+4. Set Root Directory → \`frontend\`
 5. Click **Deploy**
 
 ✅ Zero-config deployment
 
----
-
 ### 🔌 Backend (Later Deployment)
+Deploy the \`backend/\` directory to any of the following:
 
-Deploy the `backend/` directory to any of the following:
-
-* 🟢 Render
-* 🟢 Railway
-* 🟢 Google Cloud Run
-* 🟢 VPS / Docker
+🟢 Render
+🟢 Railway
+🟢 Google Cloud Run
+🟢 VPS / Docker
 
 After deployment, configure the frontend:
 
-```env
+\`\`\`env
 PYTHON_API_URL=https://your-backend-host
-```
+\`\`\`
 
 The frontend route:
-
-```text
+\`\`\`
 /api/session
-```
-
+\`\`\`
 automatically proxies requests to the backend API.
-
----
 
 ## 🔐 Enterprise-Ready Features
 
@@ -142,42 +121,24 @@ automatically proxies requests to the backend API.
 ✔️ Scalable Next.js App Router
 ✔️ Environment-based configuration
 
----
-
 ## 🧠 Designed For
-
-* 🧑‍💻 Developers
-* 📖 Researchers & Readers
-* 🧠 Deep-work professionals
-* 🏢 Enterprise teams
-* 🎧 Focus & productivity products
-
----
+🧑‍💻 Developers
+📖 Researchers & Readers
+🧠 Deep-work professionals
+🏢 Enterprise teams
+🎧 Focus & productivity products
 
 ## 👤 Author
-
 **Ruslan Magana Vsevolodovna**
-🌐 [https://ruslanmv.com](https://ruslanmv.com)
-
-> Enterprise software architect & AI engineer
-
----
+🌐 https://ruslanmv.com
+Enterprise software architect & AI engineer
 
 ## ⭐ Support the Project
-
 If you found this project useful:
 
-* ⭐ **Star the repository**
-* 🔁 Share it with your team
-* 🧠 Build something amazing with it
+⭐ Star the repository
+🔁 Share it with your team
+🧠 Build something amazing with it
 
----
-
-<div align="center">
-
-### 🎵 SoundFlow AI
-
-**Focus. Flow. Perform.**
-
-</div>
-```
+🎵 **SoundFlow AI**
+Focus. Flow. Perform.

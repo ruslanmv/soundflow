@@ -1,0 +1,51 @@
+# PREMIUM daily prompts for MusicGen / Stable Audio
+# Keep prompts short and structured for reproducibility.
+
+version: 1
+defaults:
+  duration_sec: 30          # generate in chunks, then stitch to longer
+  target_total_sec: 600     # final track length (e.g. 10 minutes)
+  export_bitrate: "192k"
+  target_lufs: -14
+  fade_in_ms: 1200
+  fade_out_ms: 2500
+
+tracks:
+  - id: premium_deep_work
+    title: "AI Deep Work Daily"
+    category: "Deep Work"
+    prompt: "minimal focus electronic, no vocals, steady pulse, warm synth pad, clean mix"
+    bpm: 90
+    key: "D minor"
+    goalTags: ["deep_work", "coding"]
+    natureTags: ["rain"]
+    energyMin: 40
+    energyMax: 90
+    ambienceMin: 0
+    ambienceMax: 60
+
+  - id: premium_study
+    title: "AI Study Daily"
+    category: "Study"
+    prompt: "soft ambient study music, gentle piano, no vocals, calm texture, clean"
+    bpm: 80
+    key: "C major"
+    goalTags: ["study", "reading"]
+    natureTags: ["forest"]
+    energyMin: 10
+    energyMax: 70
+    ambienceMin: 0
+    ambienceMax: 70
+
+  - id: premium_relax
+    title: "AI Relax Daily"
+    category: "Relax"
+    prompt: "deep ambient relaxation, slow evolving pads, no vocals, smooth and warm"
+    bpm: 70
+    key: "A minor"
+    goalTags: ["relax", "meditation"]
+    natureTags: ["ocean"]
+    energyMin: 0
+    energyMax: 50
+    ambienceMin: 20
+    ambienceMax: 100

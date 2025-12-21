@@ -1,0 +1,47 @@
+[
+  {
+    "id": "free-2025-12-17-deep_work",
+    "title": "Deep Work Session",
+    "tier": "free",
+    "date": "2025-12-17",
+    "category": "Deep Work / Focus",
+    "durationSec": 3600,
+    "goalTags": ["deep_work", "productivity", "flow", "concentration"],
+    "natureTags": ["rain"],
+    "energyMin": 40,
+    "energyMax": 90,
+    "ambienceMin": 0,
+    "ambienceMax": 60,
+    "url": "https://upload.wikimedia.org/wikipedia/commons/9/9d/Anthem_of_Europe_%28US_Navy_instrumental_long_version%29.ogg"
+  },
+  {
+    "id": "free-2025-12-17-study",
+    "title": "Study & Reading Focus",
+    "tier": "free",
+    "date": "2025-12-17",
+    "category": "Study / Reading",
+    "durationSec": 3600,
+    "goalTags": ["study", "reading", "calm_focus"],
+    "natureTags": ["forest"],
+    "energyMin": 15,
+    "energyMax": 70,
+    "ambienceMin": 0,
+    "ambienceMax": 70,
+    "url": "https://upload.wikimedia.org/wikipedia/commons/6/69/Forest_track_2.ogg"
+  },
+  {
+    "id": "free-2025-12-17-relax",
+    "title": "Relaxing Background Mix",
+    "tier": "free",
+    "date": "2025-12-17",
+    "category": "Relax / Ambient",
+    "durationSec": 3600,
+    "goalTags": ["relax", "ambient", "calm"],
+    "natureTags": ["ocean"],
+    "energyMin": 0,
+    "energyMax": 55,
+    "ambienceMin": 20,
+    "ambienceMax": 100,
+    "url": "https://upload.wikimedia.org/wikipedia/commons/1/16/Oceanwavescrushing.ogg"
+  }
+]

@@ -1,31 +1,67 @@
-# Dependencies
-node_modules
-.pnp
-.pnp.js
-venv/
-__pycache__
+# -----------------------------
+# Root
+# -----------------------------
+.DS_Store
+Thumbs.db
+*.log
 
-# Next.js
-.next/
-out/
-build
-
-# Python
-.venv/
-__pycache__/
-*.pyc
-
+# -----------------------------
 # Environment
+# -----------------------------
 .env
 .env.*
+!.env.example
 
-# System
-.DS_Store
-*.pem
-
-# Debug
+# -----------------------------
+# Node / Next.js
+# -----------------------------
+node_modules/
+.pnp/
+.pnp.js
+.next/
+out/
+dist/
+build/
+coverage/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-backend/uv.lock
+
+# -----------------------------
+# Python
+# -----------------------------
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.venv/
+venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.cache/
+
+# -----------------------------
+# IDE
+# -----------------------------
+.vscode/
+.idea/
+
+# -----------------------------
+# Local catalogs / artifacts
+# -----------------------------
+catalog/*.json
+!catalog/*sample*.json
+generator/free/assets/stems/
+generator/free/assets/soundfonts/
 /backup
+* copy*
+* copy *
+* copy *.*
+/generator/.soundflow_out
+/generator/.soundflow_tmp
+generator/uv.lock
+/generator/api_test_outputs
+/generator/quality_showcase_outputs
+/generator/competition_pack_outputs
