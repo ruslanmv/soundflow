@@ -1,0 +1,176 @@
+name: Premium On-Demand Generator
+
+on:
+  workflow_dispatch:
+    inputs:
+      category:
+        description: 'Site category'
+        required: true
+        type: choice
+        options:
+          - Deep Work
+          - Study
+          - Relax
+          - Nature
+          - Flow State
+
+      track_id:
+        description: 'Track ID (e.g., custom_focus_1)'
+        required: true
+        type: string
+
+      duration:
+        description: 'Duration in seconds'
+        required: false
+        type: number
+        default: 180
+
+      model:
+        description: 'AI model to use'
+        required: false
+        type: choice
+        default: 'musicgen-stereo-large'
+        options:
+          - musicgen-stereo-large
+          - musicgen-stereo-medium
+          - stable-audio
+
+      gpu_provider:
+        description: 'GPU provider'
+        required: false
+        type: choice
+        default: 'manual'
+        options:
+          - manual
+          - modal
+          - replicate
+          - runpod
+
+jobs:
+  generate-premium:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    env:
+      R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_REGION: ${{ secrets.R2_REGION }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        run: |
+          python -m pip install --upgrade pip
+          pip install -U uv
+
+      - name: Install generator deps
+        working-directory: generator
+        run: |
+          uv sync
+
+      - name: Display generation parameters
+        run: |
+          echo "🎵 Premium Generation Request"
+          echo "============================="
+          echo "Category: ${{ inputs.category }}"
+          echo "Track ID: ${{ inputs.track_id }}"
+          echo "Duration: ${{ inputs.duration }}s"
+          echo "Model: ${{ inputs.model }}"
+          echo "GPU Provider: ${{ inputs.gpu_provider }}"
+          echo ""
+
+      - name: Manual GPU Instructions
+        if: inputs.gpu_provider == 'manual'
+        run: |
+          echo "📋 MANUAL GPU GENERATION INSTRUCTIONS"
+          echo "======================================"
+          echo ""
+          echo "This workflow requires manual GPU generation."
+          echo "Follow these steps:"
+          echo ""
+          echo "1. Open Google Colab:"
+          echo "   https://colab.research.google.com/"
+          echo ""
+          echo "2. Upload notebook:"
+          echo "   generator/notebooks/SoundFlow_Premium_Colab.ipynb"
+          echo ""
+          echo "3. Enable GPU:"
+          echo "   Runtime > Change runtime type > GPU"
+          echo ""
+          echo "4. Run all cells with these settings:"
+          echo "   - DATE: $(date -u +"%Y-%m-%d")"
+          echo "   - MODEL: ${{ inputs.model }}"
+          echo "   - DURATION: ${{ inputs.duration }}"
+          echo ""
+          echo "5. Download generated track from Colab"
+          echo ""
+          echo "6. Upload to R2 manually:"
+          echo "   aws s3 cp track.mp3 s3://$R2_BUCKET/audio/premium/$(date -u +"%Y-%m-%d")/${{ inputs.track_id }}.mp3"
+          echo ""
+          echo "7. Run catalog builder:"
+          echo "   python -m common.build_general_catalog --bucket $R2_BUCKET --upload"
+          echo ""
+          echo "❌ Workflow will exit now. Complete steps above manually."
+          exit 1
+
+      - name: Call Modal GPU Service
+        if: inputs.gpu_provider == 'modal'
+        run: |
+          echo "🚀 Calling Modal GPU service..."
+          echo "⚠️  Modal integration not yet implemented."
+          echo "See: https://modal.com/docs/examples/musicgen"
+          exit 1
+
+      - name: Call Replicate API
+        if: inputs.gpu_provider == 'replicate'
+        env:
+          REPLICATE_API_TOKEN: ${{ secrets.REPLICATE_API_TOKEN }}
+        run: |
+          echo "🚀 Calling Replicate API..."
+          echo "⚠️  Replicate integration not yet implemented."
+          echo "See: https://replicate.com/meta/musicgen"
+          exit 1
+
+      - name: Call RunPod API
+        if: inputs.gpu_provider == 'runpod'
+        env:
+          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+        run: |
+          echo "🚀 Calling RunPod API..."
+          echo "⚠️  RunPod integration not yet implemented."
+          echo "See: https://www.runpod.io/serverless-gpu"
+          exit 1
+
+      - name: Build general catalog
+        if: success()
+        working-directory: generator
+        run: |
+          echo "🏗️  Rebuilding general catalog..."
+          uv run python -m common.build_general_catalog \
+            --bucket "$R2_BUCKET" \
+            --upload
+
+      - name: Summary
+        if: success()
+        run: |
+          echo "✅ Premium generation complete!"
+          echo ""
+          echo "📊 Generated:"
+          echo "  Track: ${{ inputs.track_id }}"
+          echo "  Category: ${{ inputs.category }}"
+          echo "  Duration: ${{ inputs.duration }}s"
+          echo "  Model: ${{ inputs.model }}"
+          echo ""
+          echo "📦 Updated catalogs:"
+          echo "  - catalog/premium.json"
+          echo "  - catalog/all.json"
+          echo "  - catalog/by-category/${{ inputs.category }}.json"

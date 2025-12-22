@@ -181,6 +181,50 @@ def load_presets() -> dict:
         return {"presets": []}
     return yaml.safe_load(p.read_text(encoding="utf-8"))
 
+
+def load_daily_plan() -> dict:
+    """Load daily generation plan mapping site categories to genres."""
+    p = Path(__file__).resolve().parents[1] / "prompts" / "free_daily_plan.yaml"
+    if not p.exists():
+        raise RuntimeError(f"Daily plan not found: {p}")
+    return yaml.safe_load(p.read_text(encoding="utf-8"))
+
+
+def apply_genre_rotation(track_config: dict, date: str) -> dict:
+    """
+    Apply genre rotation based on day of week.
+
+    Args:
+        track_config: Track configuration from daily plan
+        date: Date string (YYYY-MM-DD)
+
+    Returns:
+        Updated track config with rotated genre
+    """
+    from datetime import datetime
+
+    # Parse date to get day of week (0=Monday, 6=Sunday)
+    dt = datetime.strptime(date, "%Y-%m-%d")
+    day_of_week = dt.weekday()
+
+    # Load rotation schedule
+    plan = load_daily_plan()
+    rotation = plan.get("genre_rotation", {})
+
+    # Get site category
+    site_category = track_config.get("siteCategory", "").lower().replace(" ", "_")
+
+    # Apply rotation if defined
+    if site_category in rotation:
+        day_rotation = rotation[site_category]
+        if day_of_week in day_rotation:
+            rotated_genre = day_rotation[day_of_week]
+            track_config = dict(track_config)  # Copy
+            track_config["genre"] = rotated_genre
+            print(f"   🔄 Genre rotation ({site_category}): {rotated_genre} (day {day_of_week})")
+
+    return track_config
+
 def ensure_procedural_library(date_seed: str) -> None:
     STEMS_DIR.mkdir(parents=True, exist_ok=True)
     return
@@ -875,47 +919,157 @@ def main() -> None:
     )
     ap.add_argument("--date", required=True, help="Generation date (YYYY-MM-DD)")
     ap.add_argument("--duration-sec", type=int, default=180, help="Track duration in seconds")
-    ap.add_argument("--upload", action="store_true", help="Upload to R2 storage")
-    ap.add_argument("--json", type=str, help="JSON recipe file")
-    
+    ap.add_argument("--upload", action="store_true", help="Upload to R2 storage and update catalog")
+    ap.add_argument("--json", type=str, help="JSON recipe file (legacy mode)")
+    ap.add_argument(
+        "--use-daily-plan",
+        action="store_true",
+        default=True,
+        help="Use daily plan (default)",
+    )
+
     args = ap.parse_args()
     bucket = os.environ.get("R2_BUCKET")
-    
+
     print("=" * 70)
     print("🎵 SoundFlow Professional DJ Engine v6.1")
     print("=" * 70)
-    
+
+    # -------------------------------------------------------------------------
+    # LEGACY MODE: Custom JSON
+    # -------------------------------------------------------------------------
     if args.json:
         p = Path(args.json)
-        if not p.exists(): raise RuntimeError(f"JSON file not found: {args.json}")
+        if not p.exists():
+            raise RuntimeError(f"JSON file not found: {args.json}")
         data = json.loads(p.read_text(encoding="utf-8"))
         combos = data.get("combinations", [])
-        
+
         for i, combo in enumerate(combos, 1):
             mp3, _ = build_track(args.date, combo, args.duration_sec)
             if args.upload and bucket:
                 key = f"audio/free/{args.date}/{mp3.name}"
                 upload_file(mp3, bucket, key, public=True)
                 print(f"   ☁️  Uploaded to R2: {key}")
-    else:
-        # Default behavior
-        presets = load_presets().get("presets", [])
-        if not presets:
-            presets = [{
+        return
+
+    # -------------------------------------------------------------------------
+    # DAILY PLAN MODE: Generate for all site categories
+    # -------------------------------------------------------------------------
+    if args.use_daily_plan:
+        print("\n📋 Loading daily generation plan...")
+        plan = load_daily_plan()
+        tracks = plan.get("tracks", [])
+
+        if not tracks:
+            raise RuntimeError("No tracks defined in free_daily_plan.yaml")
+
+        print(f"   📦 Found {len(tracks)} categories to generate\n")
+
+        # Import catalog utilities
+        from common.catalog_write import (
+            get_catalog_paths,
+            read_catalog,
+            upsert_tracks,
+            write_catalog,
+        )
+
+        new_entries = []
+
+        for i, track_config in enumerate(tracks, 1):
+            # Apply genre rotation based on day of week
+            track_config = apply_genre_rotation(track_config, args.date)
+
+            # Override duration if specified
+            if args.duration_sec:
+                track_config["duration_sec"] = args.duration_sec
+
+            # Generate track
+            mp3, metadata = build_track(
+                args.date,
+                track_config,
+                track_config.get("duration_sec", args.duration_sec),
+            )
+
+            # Build catalog entry
+            track_id = track_config.get("id", f"track_{i}")
+            site_category = track_config.get("siteCategory", "General")
+
+            entry = {
+                "id": f"free-{args.date}-{track_id}",
+                "title": f"{site_category} Daily - {args.date}",
+                "tier": "free",
+                "date": args.date,
+                "category": site_category,
+                "genre": track_config.get("genre", "electronic"),
+                "bpm": track_config.get("bpm", 120),
+                "key": track_config.get("key", "C"),
+                "durationSec": metadata.get("duration_sec", args.duration_sec),
+                "goalTags": track_config.get("goalTags", []),
+                "natureTags": track_config.get("natureTags", []),
+                "energyMin": int(track_config.get("energyMin", 0)),
+                "energyMax": int(track_config.get("energyMax", 100)),
+                "ambienceMin": int(track_config.get("ambienceMin", 0)),
+                "ambienceMax": int(track_config.get("ambienceMax", 100)),
+                "objectKey": f"audio/free/{args.date}/{mp3.name}",
+            }
+
+            # Upload to R2
+            if args.upload and bucket:
+                upload_file(mp3, bucket, entry["objectKey"], public=True)
+                print(f"   ☁️  Uploaded to R2: {entry['objectKey']}")
+
+            new_entries.append(entry)
+            print(f"   ✅ Completed: {entry['id']}\n")
+
+        # Update free catalog
+        if args.upload and bucket:
+            print("\n📚 Updating free catalog...")
+            paths = get_catalog_paths()
+
+            existing = read_catalog(bucket, paths.free_key)
+            merged = upsert_tracks(existing, new_entries)
+            write_catalog(bucket, paths.free_key, merged)
+
+            print(f"   ✅ Updated: s3://{bucket}/{paths.free_key}")
+            print(f"   📊 Total free tracks: {len(merged)}")
+            print(f"   🆕 New tracks: {len(new_entries)}")
+
+            print(
+                "\nℹ️  Run 'python -m common.build_general_catalog --bucket "
+                f"{bucket} --upload' to rebuild general index"
+            )
+        else:
+            print(
+                f"\nℹ️  Generated {len(new_entries)} tracks locally. "
+                "Run with --upload to push to R2 and update catalog."
+            )
+
+        return
+
+    # -------------------------------------------------------------------------
+    # FALLBACK MODE: Use presets (legacy)
+    # -------------------------------------------------------------------------
+    print("\n📋 Loading presets (legacy mode)...")
+    presets = load_presets().get("presets", [])
+    if not presets:
+        presets = [
+            {
                 "id": "default-house",
                 "title": "House Session",
                 "genre": "House",
                 "category": "music",
                 "stem_length": "medium",
-                "energy_curve": "peak"
-            }]
-        
-        for i, preset in enumerate(presets, 1):
-            mp3, _ = build_track(args.date, preset, args.duration_sec)
-            if args.upload and bucket:
-                key = f"audio/free/{args.date}/{mp3.name}"
-                upload_file(mp3, bucket, key, public=True)
-                print(f"   ☁️  Uploaded to R2: {key}")
+                "energy_curve": "peak",
+            }
+        ]
+
+    for i, preset in enumerate(presets, 1):
+        mp3, _ = build_track(args.date, preset, args.duration_sec)
+        if args.upload and bucket:
+            key = f"audio/free/{args.date}/{mp3.name}"
+            upload_file(mp3, bucket, key, public=True)
+            print(f"   ☁️  Uploaded to R2: {key}")
 
 if __name__ == "__main__":
     main()

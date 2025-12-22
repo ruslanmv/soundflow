@@ -1,51 +1,268 @@
-# PREMIUM daily prompts for MusicGen / Stable Audio
-# Keep prompts short and structured for reproducibility.
+# ============================================================================
+# PREMIUM AI MUSIC PROMPTS
+# ============================================================================
+# Enterprise-grade music generation configuration with DSP enhancements
+#
+# DSP Flags Reference:
+# - binaural: Enable binaural beat injection
+# - binaural_freq: Beat frequency (Hz) - Gamma(40), Beta(20), Alpha(10), Theta(6), Delta(3)
+# - binaural_base: Carrier frequency (Hz) - typically 100-300
+# - sidechain: Enable sidechain compression (EDM pumping)
+# - bpm: Tempo for sidechain timing
+# - ducking_strength: Sidechain intensity (0.0-1.0)
+# - fade_in_ms: Fade-in duration (milliseconds)
+# - fade_out_ms: Fade-out duration (milliseconds)
+# ============================================================================
 
-version: 1
+version: 2
 defaults:
-  duration_sec: 30          # generate in chunks, then stitch to longer
-  target_total_sec: 600     # final track length (e.g. 10 minutes)
-  export_bitrate: "192k"
-  target_lufs: -14
-  fade_in_ms: 1200
-  fade_out_ms: 2500
+  duration_sec: 30          # Chunk size for generation
+  target_total_sec: 180     # Total track length (3 minutes)
+  export_bitrate: "320k"    # Premium quality MP3
+  target_lufs: -14.0        # Broadcast standard loudness
+  fade_in_ms: 1500
+  fade_out_ms: 3000
+
+# ============================================================================
+# FOCUS & PRODUCTIVITY TRACKS
+# ============================================================================
 
 tracks:
-  - id: premium_deep_work
-    title: "AI Deep Work Daily"
+  - id: deep_focus_gamma
+    title: "Deep Focus: Gamma State (Premium)"
     category: "Deep Work"
-    prompt: "minimal focus electronic, no vocals, steady pulse, warm synth pad, clean mix"
+    prompt: "ambient electronic focus music, minimal beats, warm analog synthesizer pads, deep atmosphere, subtle texture, no vocals, meditative, continuous flow"
     bpm: 90
     key: "D minor"
-    goalTags: ["deep_work", "coding"]
-    natureTags: ["rain"]
-    energyMin: 40
+    goalTags: ["deep_work", "coding", "focus", "concentration"]
+    natureTags: ["rain", "white_noise"]
+    energyMin: 50
     energyMax: 90
-    ambienceMin: 0
+    ambienceMin: 10
     ambienceMax: 60
+    target_total_sec: 300  # 5 minutes
+    dsp_flags:
+      binaural: true
+      binaural_freq: 40.0   # Gamma waves for peak focus
+      binaural_base: 200.0
+      binaural_mix: 0.15
+      fade_in_ms: 2000
+      fade_out_ms: 4000
 
-  - id: premium_study
-    title: "AI Study Daily"
-    category: "Study"
-    prompt: "soft ambient study music, gentle piano, no vocals, calm texture, clean"
-    bpm: 80
+  - id: creative_flow_alpha
+    title: "Creative Flow: Alpha State (Premium)"
+    category: "Creative"
+    prompt: "ambient downtempo electronic, gentle piano melodies, lush pads, soft beats, dreamy atmosphere, creative and inspiring, no vocals"
+    bpm: 85
     key: "C major"
-    goalTags: ["study", "reading"]
-    natureTags: ["forest"]
-    energyMin: 10
+    goalTags: ["creative", "writing", "design", "brainstorming"]
+    natureTags: ["forest", "birds"]
+    energyMin: 30
     energyMax: 70
-    ambienceMin: 0
-    ambienceMax: 70
-
-  - id: premium_relax
-    title: "AI Relax Daily"
-    category: "Relax"
-    prompt: "deep ambient relaxation, slow evolving pads, no vocals, smooth and warm"
-    bpm: 70
-    key: "A minor"
-    goalTags: ["relax", "meditation"]
-    natureTags: ["ocean"]
-    energyMin: 0
-    energyMax: 50
     ambienceMin: 20
+    ambienceMax: 80
+    target_total_sec: 240
+    dsp_flags:
+      binaural: true
+      binaural_freq: 10.0   # Alpha waves for creativity
+      binaural_base: 180.0
+      binaural_mix: 0.12
+      fade_in_ms: 1500
+      fade_out_ms: 3000
+
+# ============================================================================
+# MEDITATION & RELAXATION TRACKS
+# ============================================================================
+
+  - id: deep_meditation_theta
+    title: "Deep Meditation: Theta State (Premium)"
+    category: "Meditation"
+    prompt: "deep ambient meditation music, slowly evolving drones, gentle cosmic pads, ethereal atmosphere, healing frequencies, no rhythm, peaceful and transcendent"
+    bpm: 60
+    key: "A minor"
+    goalTags: ["meditation", "mindfulness", "sleep", "healing"]
+    natureTags: ["ocean", "space"]
+    energyMin: 0
+    energyMax: 30
+    ambienceMin: 40
     ambienceMax: 100
+    target_total_sec: 600  # 10 minutes
+    dsp_flags:
+      binaural: true
+      binaural_freq: 6.0    # Theta waves for deep meditation
+      binaural_base: 150.0
+      binaural_mix: 0.18
+      fade_in_ms: 3000
+      fade_out_ms: 5000
+
+  - id: sleep_delta
+    title: "Deep Sleep: Delta Waves (Premium)"
+    category: "Sleep"
+    prompt: "ultra-deep sleep ambient music, very slow evolving soundscape, warm low frequency drones, dark peaceful atmosphere, healing tones, no beats"
+    bpm: 50
+    key: "G minor"
+    goalTags: ["sleep", "rest", "recovery", "healing"]
+    natureTags: ["night", "silence"]
+    energyMin: 0
+    energyMax: 20
+    ambienceMin: 60
+    ambienceMax: 100
+    target_total_sec: 900  # 15 minutes
+    dsp_flags:
+      binaural: true
+      binaural_freq: 3.0    # Delta waves for deep sleep
+      binaural_base: 100.0
+      binaural_mix: 0.20
+      fade_in_ms: 4000
+      fade_out_ms: 6000
+
+# ============================================================================
+# EDM & ENERGETIC TRACKS (with Sidechain)
+# ============================================================================
+
+  - id: lofi_house_pump
+    title: "Lo-Fi House Flow (Premium)"
+    category: "Flow"
+    prompt: "lo-fi house music, 124 BPM, deep warm bassline, dusty vinyl drums, rhodes piano chords, jazzy atmosphere, groovy and hypnotic, high fidelity production"
+    bpm: 124
+    key: "F minor"
+    goalTags: ["flow", "coding", "work", "energy"]
+    natureTags: ["urban", "cafe"]
+    energyMin: 60
+    energyMax: 95
+    ambienceMin: 0
+    ambienceMax: 40
+    target_total_sec: 240
+    dsp_flags:
+      sidechain: true
+      bpm: 124
+      ducking_strength: 0.6
+      sidechain_attack: 0.3
+      fade_in_ms: 1000
+      fade_out_ms: 2000
+
+  - id: techno_energy
+    title: "Techno Energy Drive (Premium)"
+    category: "Energy"
+    prompt: "driving techno music, 128 BPM, powerful kick drum, dark atmospheric synths, hypnotic arpeggios, industrial texture, high energy and relentless"
+    bpm: 128
+    key: "E minor"
+    goalTags: ["energy", "workout", "power", "intensity"]
+    natureTags: ["industrial", "machine"]
+    energyMin: 80
+    energyMax: 100
+    ambienceMin: 0
+    ambienceMax: 30
+    target_total_sec: 180
+    dsp_flags:
+      sidechain: true
+      bpm: 128
+      ducking_strength: 0.75
+      sidechain_attack: 0.25
+      fade_in_ms: 800
+      fade_out_ms: 1500
+
+  - id: progressive_house_uplifting
+    title: "Progressive House Uplift (Premium)"
+    category: "Motivation"
+    prompt: "uplifting progressive house, 126 BPM, emotional melodic leads, warm lush pads, energetic drums, euphoric breakdown, inspiring and motivational"
+    bpm: 126
+    key: "A major"
+    goalTags: ["motivation", "energy", "positive", "workout"]
+    natureTags: ["sunrise", "sky"]
+    energyMin: 70
+    energyMax: 100
+    ambienceMin: 10
+    ambienceMax: 50
+    target_total_sec: 300
+    dsp_flags:
+      sidechain: true
+      bpm: 126
+      ducking_strength: 0.65
+      sidechain_attack: 0.28
+      fade_in_ms: 1200
+      fade_out_ms: 2500
+
+# ============================================================================
+# STUDY & CONCENTRATION TRACKS
+# ============================================================================
+
+  - id: study_lofi
+    title: "Study Lo-Fi Beats (Premium)"
+    category: "Study"
+    prompt: "calm lo-fi hip hop beats, soft jazz piano, vinyl crackle texture, gentle boom-bap drums, warm bass, nostalgic and peaceful atmosphere"
+    bpm: 85
+    key: "C major"
+    goalTags: ["study", "reading", "learning", "calm"]
+    natureTags: ["rain", "library"]
+    energyMin: 20
+    energyMax: 60
+    ambienceMin: 10
+    ambienceMax: 70
+    target_total_sec: 360  # 6 minutes
+    dsp_flags:
+      binaural: true
+      binaural_freq: 12.0   # Low Alpha for relaxed focus
+      binaural_base: 190.0
+      binaural_mix: 0.10
+      fade_in_ms: 1800
+      fade_out_ms: 3500
+
+  - id: classical_study
+    title: "Classical Study Ambience (Premium)"
+    category: "Study"
+    prompt: "gentle classical music inspired ambient, soft string harmonies, delicate piano passages, orchestral texture, elegant and sophisticated, no percussion"
+    bpm: 72
+    key: "D major"
+    goalTags: ["study", "reading", "elegance", "classical"]
+    natureTags: ["library", "museum"]
+    energyMin: 15
+    energyMax: 55
+    ambienceMin: 20
+    ambienceMax: 80
+    target_total_sec: 300
+    dsp_flags:
+      fade_in_ms: 2000
+      fade_out_ms: 4000
+
+# ============================================================================
+# AMBIENT & ATMOSPHERIC TRACKS
+# ============================================================================
+
+  - id: space_ambient
+    title: "Cosmic Space Journey (Premium)"
+    category: "Ambient"
+    prompt: "deep space ambient music, cosmic drones, mysterious synthesizer textures, vast soundscape, celestial atmosphere, otherworldly and expansive"
+    bpm: 0  # No rhythm
+    key: "B minor"
+    goalTags: ["ambient", "meditation", "space", "exploration"]
+    natureTags: ["space", "cosmos", "stars"]
+    energyMin: 5
+    energyMax: 40
+    ambienceMin: 50
+    ambienceMax: 100
+    target_total_sec: 480  # 8 minutes
+    dsp_flags:
+      binaural: true
+      binaural_freq: 7.5    # Theta for deep contemplation
+      binaural_base: 140.0
+      binaural_mix: 0.14
+      fade_in_ms: 3500
+      fade_out_ms: 5500
+
+  - id: nature_soundscape
+    title: "Pure Nature Soundscape (Premium)"
+    category: "Nature"
+    prompt: "natural ambient soundscape, forest atmosphere, gentle rainfall, distant thunder, bird calls, flowing water, peaceful and organic, immersive nature"
+    bpm: 0
+    key: "A minor"
+    goalTags: ["nature", "relaxation", "meditation", "calm"]
+    natureTags: ["forest", "rain", "water", "birds"]
+    energyMin: 0
+    energyMax: 35
+    ambienceMin: 60
+    ambienceMax: 100
+    target_total_sec: 600  # 10 minutes
+    dsp_flags:
+      fade_in_ms: 4000
+      fade_out_ms: 6000

@@ -210,6 +210,13 @@ export default function Page() {
                   AI Session
                 </a>
                 <a
+                  href="/premium"
+                  className="text-gray-300 hover:text-white transition-colors duration-200 flex items-center gap-1"
+                >
+                  <i className="fas fa-crown text-yellow-500 text-sm" />
+                  Premium
+                </a>
+                <a
                   href="#"
                   onClick={(e) => e.preventDefault()}
                   className="text-gray-300 hover:text-white transition-colors duration-200"
@@ -219,10 +226,13 @@ export default function Page() {
               </div>
             </div>
             <div className="flex items-center space-x-4">
-              <button className="hidden md:block px-4 py-2 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 transition-all duration-200">
+              <a
+                href="/profile"
+                className="hidden md:block px-4 py-2 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 transition-all duration-200"
+              >
                 <i className="fas fa-user mr-2" />
-                Account
-              </button>
+                Profile
+              </a>
               <button className="md:hidden p-2 rounded-lg bg-white/5 hover:bg-white/10">
                 <i className="fas fa-bars" />
               </button>

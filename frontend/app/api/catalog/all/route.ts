@@ -10,15 +10,15 @@ export async function GET(req: Request) {
     );
   }
 
-  // Fixed: Call correct backend endpoint
-  const upstream = await fetch(`${PYTHON_API_URL}/tracks/premium/daily`, {
+  // Proxy to backend general catalog endpoint
+  const upstream = await fetch(`${PYTHON_API_URL}/catalog/all`, {
     method: "GET",
-    headers: { "Content-Type": "application/json" }
+    headers: { "Content-Type": "application/json" },
   });
 
   const text = await upstream.text();
   return new NextResponse(text, {
     status: upstream.status,
-    headers: { "Content-Type": "application/json" }
+    headers: { "Content-Type": "application/json" },
   });
 }
