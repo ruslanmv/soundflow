@@ -5,7 +5,7 @@ const PREMIUM_API_KEY = process.env.PREMIUM_API_KEY;
 
 export async function GET(
   req: Request,
-  { params }: { params: { trackId: string } }
+  { params }: { params: Promise<{ trackId: string }> }
 ) {
   if (!PYTHON_API_URL) {
     return NextResponse.json(
@@ -21,7 +21,7 @@ export async function GET(
     );
   }
 
-  const { trackId } = params;
+  const { trackId } = await params;
 
   // Proxy to backend premium signed URL endpoint
   const upstream = await fetch(
