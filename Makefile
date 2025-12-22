@@ -2,7 +2,7 @@
 
 PROJECT_NAME := soundflow-monorepo
 
-.PHONY: help install install-frontend install-backend install-generator lock-backend lock-generator serve serve-frontend serve-backend test-generator clean
+.PHONY: help install install-frontend install-backend install-generator lock-backend lock-generator serve serve-frontend serve-backend test-generator clean gpu-premium gpu-test gpu-colab gpu-kaggle
 
 help: ## Show available commands
 	@echo "$(PROJECT_NAME)"
@@ -64,3 +64,51 @@ test-generator: ## Run generator smoke test
 
 clean: ## Remove build artifacts
 	@rm -rf frontend/.next frontend/out backend/.venv generator/.venv
+
+# ============================================================================
+# GPU/PREMIUM TARGETS
+# ============================================================================
+
+gpu-premium: ## Generate premium tracks (requires GPU)
+	@echo "🎵 Generating Premium Tracks with MusicGen Stereo Large..."
+	@echo "⚠️  Requires: CUDA GPU with 16GB+ VRAM"
+	@cd generator && uv run python -m premium.musicgen_daily --date $(shell date +%Y-%m-%d) --device cuda
+
+gpu-test: ## Test GPU availability and model loading
+	@echo "🔍 Testing GPU Setup..."
+	@cd generator && uv run python -c "import torch; print(f'CUDA Available: {torch.cuda.is_available()}'); print(f'GPU: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"N/A\"}'); from audiocraft.models import MusicGen; print('✅ Audiocraft installed')"
+
+gpu-colab: ## Setup instructions for Google Colab
+	@echo "📋 Google Colab Setup Instructions:"
+	@echo ""
+	@echo "1. Clone repository:"
+	@echo "   !git clone https://github.com/YOUR_USERNAME/soundflow.git"
+	@echo "   %cd soundflow/generator"
+	@echo ""
+	@echo "2. Install system dependencies:"
+	@echo "   !apt-get -qq update && apt-get -qq install -y ffmpeg"
+	@echo ""
+	@echo "3. Install Python dependencies:"
+	@echo "   !pip install -q -r requirements-gpu.txt"
+	@echo ""
+	@echo "4. Generate tracks:"
+	@echo "   !python -m premium.musicgen_daily --date 2025-01-15 --device cuda"
+	@echo ""
+	@echo "5. Download results:"
+	@echo "   from google.colab import files"
+	@echo "   files.download('.soundflow_out/premium/premium-2025-01-15-deep_focus_gamma.mp3')"
+
+gpu-kaggle: ## Setup instructions for Kaggle
+	@echo "📋 Kaggle Setup Instructions:"
+	@echo ""
+	@echo "1. Create new notebook with GPU accelerator (P100 or T4)"
+	@echo ""
+	@echo "2. Add dataset: Upload soundflow generator folder"
+	@echo ""
+	@echo "3. Install dependencies:"
+	@echo "   !pip install -q -r /kaggle/input/soundflow/requirements-gpu.txt"
+	@echo ""
+	@echo "4. Generate tracks:"
+	@echo "   !python /kaggle/input/soundflow/premium/musicgen_daily.py --date 2025-01-15"
+	@echo ""
+	@echo "5. Output available in: /kaggle/working/.soundflow_out/premium/"

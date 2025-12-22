@@ -79,3 +79,48 @@ def session_free(req: FreeSessionRequest):
     )
 
     return FreeSessionResponse(track=chosen)
+
+
+# ==============================================================================
+# CATALOG ENDPOINTS (For Frontend Playlist/Browse)
+# ==============================================================================
+
+
+@app.get("/catalog/all", response_model=list[TrackPublic])
+def catalog_all():
+    """
+    Returns the general catalog (all tracks: free + premium).
+
+    This is the main index for browsing all available tracks.
+    Premium tracks will have objectKey but not signed URLs.
+    """
+    catalog = CatalogService()
+    return catalog.get_general_catalog()
+
+
+@app.get("/catalog/by-category/{category}", response_model=list[TrackPublic])
+def catalog_by_category(category: str):
+    """
+    Returns tracks for a specific site category.
+
+    Categories:
+    - deep-work
+    - study
+    - relax
+    - nature
+    - flow-state
+    """
+    catalog = CatalogService()
+    return catalog.get_category_catalog(category)
+
+
+@app.get("/catalog/premium", response_model=list[TrackPublic])
+def catalog_premium():
+    """
+    Returns all premium tracks (metadata only, no signed URLs).
+
+    For playback, client must request signed URL per track via:
+    GET /tracks/premium/{track_id}/signed
+    """
+    catalog = CatalogService()
+    return catalog.get_premium_catalog()

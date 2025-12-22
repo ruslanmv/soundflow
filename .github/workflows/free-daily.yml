@@ -9,7 +9,7 @@ on:
 jobs:
   generate-free:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     env:
       R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
@@ -44,13 +44,42 @@ jobs:
         run: |
           uv sync
 
-      - name: Generate + Upload free catalog for today
+      - name: Generate FREE tracks for all site categories
         working-directory: generator
         run: |
           TODAY=$(date -u +"%Y-%m-%d")
-          uv run python -m free.remix_daily --date "$TODAY" --duration-sec 3600 --upload
+          echo "📅 Generating tracks for: $TODAY"
+          echo "📋 Using daily plan: prompts/free_daily_plan.yaml"
+          uv run python -m free.remix_daily \
+            --date "$TODAY" \
+            --use-daily-plan \
+            --upload
+
+      - name: Build general catalog (all + by-category indexes)
+        working-directory: generator
+        run: |
+          echo "🏗️  Building general catalog..."
+          uv run python -m common.build_general_catalog \
+            --bucket "$R2_BUCKET" \
+            --upload
 
       - name: Validate free catalog schema
         working-directory: generator
         run: |
           uv run python -m common.validate_catalog --tier free --source r2
+
+      - name: Summary
+        run: |
+          echo "✅ Free daily generation complete!"
+          echo ""
+          echo "📊 Generated tracks for all site categories:"
+          echo "  - Deep Work"
+          echo "  - Study"
+          echo "  - Relax"
+          echo "  - Nature"
+          echo "  - Flow State"
+          echo ""
+          echo "📦 Updated catalogs:"
+          echo "  - catalog/free.json"
+          echo "  - catalog/all.json"
+          echo "  - catalog/by-category/*.json"

@@ -1,0 +1,267 @@
+# ============================================================================
+# SOUNDFLOW FREE DAILY GENERATION PLAN
+# ============================================================================
+# This file maps site categories to musical genres for daily generation.
+# One track per category is generated daily to ensure fresh content across
+# all user experiences.
+#
+# Site Categories (from frontend/lib/presets.ts):
+# - Deep Work
+# - Study
+# - Relax
+# - Nature
+# - Flow State
+#
+# Musical Genres (from generator/free/music_engine.py):
+# - techno, house, deep, trance, edm, dance, hard, bass
+# - synth, chillout, lounge, ambient, classic, vocal
+# ============================================================================
+
+version: 1
+defaults:
+  channels: 2              # Stereo
+  target_lufs: -14.0       # Broadcast standard
+  export_bitrate: "192k"   # Free tier quality
+
+# ============================================================================
+# DAILY TRACKS (One per site category)
+# ============================================================================
+
+tracks:
+  # --------------------------------------------------------------------------
+  # DEEP WORK - Steady groove, moderate energy, low distraction
+  # --------------------------------------------------------------------------
+  - id: deep_work_daily
+    siteCategory: "Deep Work"
+    genre: "deep"          # Rotates: deep, house, techno, synth
+
+    # Musical parameters
+    bpm: 124
+    key: "Dm"
+    stem_length: "long"    # ~2 minutes
+    energy_curve: "linear" # Steady energy
+
+    # Layer mix (procedural synthesis)
+    layers:
+      drums: 70
+      bass: 80
+      music: 60
+      pad: 50
+
+    # Smart mixer (DSP)
+    synth:
+      cutoff: 70
+      resonance: 25
+      drive: 15
+      space: 30
+
+    # Ambience (minimal for focus)
+    ambience:
+      rain: 15
+      vinyl: 10
+      white: 5
+
+    # Metadata
+    goalTags: ["deep_work", "coding", "focus", "concentration"]
+    natureTags: ["minimal"]
+    energyMin: 50
+    energyMax: 75
+    ambienceMin: 5
+    ambienceMax: 30
+
+  # --------------------------------------------------------------------------
+  # STUDY - Warm, low transient density, softer highs
+  # --------------------------------------------------------------------------
+  - id: study_daily
+    siteCategory: "Study"
+    genre: "lofi"          # Rotates: lofi, chillout, lounge, jazz
+
+    bpm: 85
+    key: "C"
+    stem_length: "long"
+    energy_curve: "linear"
+
+    layers:
+      drums: 50
+      bass: 60
+      music: 75
+      pad: 65
+
+    synth:
+      cutoff: 60
+      resonance: 20
+      drive: 5
+      space: 50
+
+    ambience:
+      rain: 30
+      vinyl: 25
+      white: 10
+
+    goalTags: ["study", "reading", "learning", "calm"]
+    natureTags: ["rain", "library"]
+    energyMin: 20
+    energyMax: 60
+    ambienceMin: 20
+    ambienceMax: 70
+
+  # --------------------------------------------------------------------------
+  # RELAX - Low energy, more reverb, minimal drums
+  # --------------------------------------------------------------------------
+  - id: relax_daily
+    siteCategory: "Relax"
+    genre: "ambient"       # Rotates: ambient, classic, lounge
+
+    bpm: 70
+    key: "Am"
+    stem_length: "long"
+    energy_curve: "drop"   # Gentle drop to low energy
+
+    layers:
+      drums: 20
+      bass: 40
+      music: 55
+      pad: 85
+
+    synth:
+      cutoff: 50
+      resonance: 15
+      drive: 0
+      space: 75
+
+    ambience:
+      rain: 40
+      vinyl: 5
+      white: 20
+
+    goalTags: ["relax", "meditation", "calm", "peace"]
+    natureTags: ["ocean", "rain"]
+    energyMin: 0
+    energyMax: 40
+    ambienceMin: 40
+    ambienceMax: 90
+
+  # --------------------------------------------------------------------------
+  # NATURE - Sparse music, strong ambience
+  # --------------------------------------------------------------------------
+  - id: nature_daily
+    siteCategory: "Nature"
+    genre: "ambient"       # Always ambient for nature
+
+    bpm: 60
+    key: "G"
+    stem_length: "long"
+    energy_curve: "linear"
+
+    layers:
+      drums: 0
+      bass: 25
+      music: 35
+      pad: 70
+
+    synth:
+      cutoff: 45
+      resonance: 10
+      drive: 0
+      space: 90
+
+    ambience:
+      rain: 80          # Strong nature sounds
+      vinyl: 0
+      white: 15
+
+    goalTags: ["nature", "relaxation", "meditation", "ambient"]
+    natureTags: ["forest", "rain", "water", "birds"]
+    energyMin: 0
+    energyMax: 35
+    ambienceMin: 60
+    ambienceMax: 100
+
+  # --------------------------------------------------------------------------
+  # FLOW STATE - Higher energy, motion, drops/builds
+  # --------------------------------------------------------------------------
+  - id: flow_state_daily
+    siteCategory: "Flow State"
+    genre: "trance"        # Rotates: trance, edm, dance, bass
+
+    bpm: 138
+    key: "Em"
+    stem_length: "long"
+    energy_curve: "peak"   # Classic build-peak-drop
+
+    layers:
+      drums: 85
+      bass: 90
+      music: 70
+      pad: 40
+
+    synth:
+      cutoff: 80
+      resonance: 35
+      drive: 25
+      space: 40
+
+    ambience:
+      rain: 0
+      vinyl: 15
+      white: 10
+
+    goalTags: ["flow", "energy", "motivation", "workout"]
+    natureTags: ["electric", "synthetic"]
+    energyMin: 70
+    energyMax: 100
+    ambienceMin: 0
+    ambienceMax: 30
+
+# ============================================================================
+# GENRE ROTATION SCHEDULE (Optional - for variety)
+# ============================================================================
+# Each category can rotate through sub-genres on different days
+# Day of week: 0=Monday, 1=Tuesday, ..., 6=Sunday
+
+genre_rotation:
+  deep_work:
+    0: "deep"      # Monday
+    1: "house"     # Tuesday
+    2: "techno"    # Wednesday
+    3: "synth"     # Thursday
+    4: "deep"      # Friday
+    5: "house"     # Saturday
+    6: "techno"    # Sunday
+
+  study:
+    0: "lofi"
+    1: "chillout"
+    2: "lounge"
+    3: "jazz"
+    4: "lofi"
+    5: "ambient"
+    6: "chillout"
+
+  relax:
+    0: "ambient"
+    1: "classic"
+    2: "lounge"
+    3: "ambient"
+    4: "chillout"
+    5: "ambient"
+    6: "lounge"
+
+  nature:
+    # Always ambient
+    0: "ambient"
+    1: "ambient"
+    2: "ambient"
+    3: "ambient"
+    4: "ambient"
+    5: "ambient"
+    6: "ambient"
+
+  flow_state:
+    0: "trance"
+    1: "edm"
+    2: "dance"
+    3: "bass"
+    4: "trance"
+    5: "edm"
+    6: "dance"

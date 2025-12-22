@@ -16,8 +16,12 @@ from app.services.storage_r2 import get_object_bytes, put_json_bytes
 class _Cache:
     free_raw: bytes | None = None
     premium_raw: bytes | None = None
+    all_raw: bytes | None = None
+    category_raw: dict[str, bytes] = {}
     free_ts: float = 0.0
     premium_ts: float = 0.0
+    all_ts: float = 0.0
+    category_ts: dict[str, float] = {}
 
 
 _CACHE = _Cache()
@@ -147,6 +151,52 @@ class CatalogService:
             expiresInSec=settings.signed_url_ttl_sec,
         )
 
+    def get_general_catalog(self) -> list[TrackPublic]:
+        """
+        Returns the general catalog (all tracks: free + premium).
+
+        This reads from catalog/all.json in R2, which is created by the
+        build_general_catalog script.
+        """
+        raw = self._get_cached_raw("all")
+        items = _ensure_list(_loads(raw))
+
+        # Sanitize data before validation
+        clean_items = [_sanitize_item(x) for x in items]
+
+        return [TrackPublic(**x) for x in clean_items]
+
+    def get_category_catalog(self, category: str) -> list[TrackPublic]:
+        """
+        Returns tracks for a specific category.
+
+        Categories: deep-work, study, relax, nature, flow-state
+
+        This reads from catalog/by-category/{category}.json in R2.
+        """
+        raw = self._get_cached_category_raw(category)
+        items = _ensure_list(_loads(raw))
+
+        # Sanitize data before validation
+        clean_items = [_sanitize_item(x) for x in items]
+
+        return [TrackPublic(**x) for x in clean_items]
+
+    def get_premium_catalog(self) -> list[TrackPublic]:
+        """
+        Returns all premium tracks (metadata only, no signed URLs).
+
+        For playback, client must request signed URL per track.
+        """
+        premium = self.get_premium_catalog_private()
+
+        # Strip objectKey and set url to None
+        out: list[TrackPublic] = []
+        for p in premium:
+            base = p.model_dump(exclude={"objectKey"})
+            out.append(TrackPublic(**base, url=None))
+        return out
+
     # -------------------------
     # Admin write APIs
     # -------------------------
@@ -177,7 +227,7 @@ class CatalogService:
     # Cache
     # -------------------------
 
-    def _get_cached_raw(self, which: Literal["free", "premium"]) -> bytes:
+    def _get_cached_raw(self, which: Literal["free", "premium", "all"]) -> bytes:
         now = time.time()
 
         if which == "free":
@@ -205,4 +255,41 @@ class CatalogService:
             _CACHE.premium_ts = now
             return raw
 
+        if which == "all":
+            if _CACHE.all_raw and (now - _CACHE.all_ts) < _CACHE_TTL_SEC:
+                return _CACHE.all_raw
+
+            raw = get_object_bytes("catalog/all.json")
+            if not raw:
+                raw = b"[]"
+
+            _CACHE.all_raw = raw
+            _CACHE.all_ts = now
+            return raw
+
         raise ValueError("Unknown cache key")
+
+    def _get_cached_category_raw(self, category: str) -> bytes:
+        """
+        Get cached raw bytes for a category catalog.
+
+        Categories: deep-work, study, relax, nature, flow-state
+        """
+        now = time.time()
+
+        # Check cache
+        if category in _CACHE.category_raw:
+            if category in _CACHE.category_ts:
+                if (now - _CACHE.category_ts[category]) < _CACHE_TTL_SEC:
+                    return _CACHE.category_raw[category]
+
+        # Fetch from R2
+        key = f"catalog/by-category/{category}.json"
+        raw = get_object_bytes(key)
+        if not raw:
+            raw = b"[]"
+
+        # Update cache
+        _CACHE.category_raw[category] = raw
+        _CACHE.category_ts[category] = now
+        return raw
